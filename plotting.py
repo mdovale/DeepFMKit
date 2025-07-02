@@ -5,6 +5,23 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import matplotlib.dates as mdates
 
+default_rc = {
+    'figure.dpi': 150,
+    'font.size': 8,
+    'axes.labelsize': 8,
+    'axes.titlesize': 9,
+    'xtick.labelsize': 8,
+    'ytick.labelsize': 8,
+    'axes.grid': True,
+    'grid.color': '#FFD700',
+    'grid.linewidth': 0.7,
+    'grid.linestyle': '--',
+    'axes.prop_cycle': plt.cycler('color', [
+        '#000000', '#DC143C', '#00BFFF', '#FFD700', '#32CD32',
+        '#FF69B4', '#FF4500', '#1E90FF', '#8A2BE2', '#FFA07A', '#8B0000'
+    ]),
+    }
+plt.rcParams.update(default_rc)
 
 def figsize(scale):
     fig_width_pt = 390  # Get this from LaTeX using \the\textwidth
@@ -91,17 +108,11 @@ def dfm_axes():
     ax6.xaxis.set_tick_params(labelsize=11)
     ax6.set_xlabel('Fit point')
     ax6.set_ylabel('SSQ')
-    ax6.grid(which='both', color='grey', linestyle='--', linewidth=0.3)
     ax5.set_ylabel('DC value')
-    ax5.grid(which='both', color='grey', linestyle='--', linewidth=0.3)
     ax4.set_ylabel('AC amp')
-    ax4.grid(which='both', color='grey', linestyle='--', linewidth=0.3)
     ax3.set_ylabel('m')
-    ax3.grid(which='both', color='grey', linestyle='--', linewidth=0.3)
     ax2.set_ylabel('$\phi\,(\mathrm{rad})$')
-    ax2.grid(which='both', color='grey', linestyle='--', linewidth=0.3)
     ax1.set_ylabel('$\psi\,(\mathrm{rad})$')
-    ax1.grid(which='both', color='grey', linestyle='--', linewidth=0.3)
 
     fig1.align_ylabels()
 
@@ -123,7 +134,7 @@ def displacement_req(x, level, corner):
 
 def time_plot(t_list, y_list, label_list=None, xrange=None, \
     title=None, y_label=None, figsize=(20,5),\
-    remove_y_offsets=False, remove_time_offsets=False):
+    remove_y_offsets=False, remove_time_offsets=False, *args, **kwargs):
     """
     Time series plot.
 
@@ -166,9 +177,9 @@ def time_plot(t_list, y_list, label_list=None, xrange=None, \
             else:
                 t = t_list[i]
             if label_list is not None:
-                ax.plot(t, y, label=label_list[i])
+                ax.plot(t, y, label=label_list[i],  *args, **kwargs)
             else:
-                ax.plot(t, y)
+                ax.plot(t, y,  *args, **kwargs)
     else:
         for i in range(len(t_list)):
             if remove_time_offsets:
@@ -179,16 +190,16 @@ def time_plot(t_list, y_list, label_list=None, xrange=None, \
             else:
                 t = t_list[i]
             if label_list is not None:
-                ax.plot(t, y_list[i], label=label_list[i])
+                ax.plot(t, y_list[i], label=label_list[i],  *args, **kwargs)
             else:
-                ax.plot(t, y_list[i])
+                ax.plot(t, y_list[i],  *args, **kwargs)
     
     if xrange is not None:
         ax.set_xlim(xrange)
         autoscale_y(ax)
 
     fig.tight_layout()
-    return fig, ax
+    return ax
 
 
 def time_histogram(df, time_key, y_key, time_floor='h', nbins = None,\

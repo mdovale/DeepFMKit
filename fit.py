@@ -1,5 +1,3 @@
-from .goto import with_goto
-
 import numpy as np
 from math import cos, sin, log, sqrt, exp
 from scipy.special import jv

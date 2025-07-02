@@ -2,16 +2,15 @@ from .plotting import *
 from .fit import *
 from .data import *
 
-import ctypes as ct
 import numpy as np
 import scipy.constants as sc
 import pandas as pd
-import matplotlib.pyplot as plt
-import os
 from tqdm import tqdm
 import pyplnoise
 import time
 import copy
+import matplotlib.pyplot as plt
+plt.rcParams.update(default_rc)
 
 import logging
 logging.basicConfig(
@@ -939,20 +938,20 @@ class DeepFitFramework():
 
         if labels is None:
             for k in self.fits:
-                ax6.semilogy(self.fits[k].time, self.fits[k].ssq);
-                ax5.plot(self.fits[k].time, self.fits[k].dc);
-                ax4.plot(self.fits[k].time, self.fits[k].amp);
-                ax3.plot(self.fits[k].time, self.fits[k].m);
-                ax2.plot(self.fits[k].time, self.fits[k].phi);
-                ax1.plot(self.fits[k].time, self.fits[k].psi, label=str(k));
+                ax6.semilogy(self.fits[k].time, self.fits[k].ssq)
+                ax5.plot(self.fits[k].time, self.fits[k].dc)
+                ax4.plot(self.fits[k].time, self.fits[k].amp)
+                ax3.plot(self.fits[k].time, self.fits[k].m)
+                ax2.plot(self.fits[k].time, self.fits[k].phi)
+                ax1.plot(self.fits[k].time, self.fits[k].psi, label=str(k))
         else:
             for k in labels:
-                ax6.semilogy(self.fits[k].time, self.fits[k].ssq);
-                ax5.plot(self.fits[k].time, self.fits[k].dc);
-                ax4.plot(self.fits[k].time, self.fits[k].amp);
-                ax3.plot(self.fits[k].time, self.fits[k].m);
-                ax2.plot(self.fits[k].time, self.fits[k].phi);
-                ax1.plot(self.fits[k].time, self.fits[k].psi, label=str(k));
+                ax6.semilogy(self.fits[k].time, self.fits[k].ssq)
+                ax5.plot(self.fits[k].time, self.fits[k].dc)
+                ax4.plot(self.fits[k].time, self.fits[k].amp)
+                ax3.plot(self.fits[k].time, self.fits[k].m)
+                ax2.plot(self.fits[k].time, self.fits[k].phi)
+                ax1.plot(self.fits[k].time, self.fits[k].psi, label=str(k))
 
         if xrange is not None:
             ax1.set_xlim(xrange)
@@ -969,6 +968,7 @@ class DeepFitFramework():
             autoscale_y(ax6)
         
         self.fig.tight_layout()
+        return (ax1, ax2, ax3, ax4, ax5, ax6)
 
     def plot_diff(self, label1, label2, xrange=None):
         """Plot the absolute difference between the fit 
@@ -984,12 +984,12 @@ class DeepFitFramework():
         if b < a:
             c = b
 
-        ax6.semilogy(self.fits[label1].time[:c], self.fits[label1].ssq[:c] - self.fits[label2].ssq[:c]);
-        ax5.plot(self.fits[label1].time[:c], self.fits[label1].dc[:c]      - self.fits[label2].dc[:c]);
-        ax4.plot(self.fits[label1].time[:c], self.fits[label1].amp[:c]     - self.fits[label2].amp[:c]);
-        ax3.plot(self.fits[label1].time[:c], self.fits[label1].m[:c]       - self.fits[label2].m[:c]);
-        ax2.plot(self.fits[label1].time[:c], self.fits[label1].phi[:c]     - self.fits[label2].phi[:c]);
-        ax1.plot(self.fits[label1].time[:c], self.fits[label1].psi[:c]     - self.fits[label2].psi[:c], label=label1+'-'+label2);
+        ax6.semilogy(self.fits[label1].time[:c], self.fits[label1].ssq[:c] - self.fits[label2].ssq[:c])
+        ax5.plot(self.fits[label1].time[:c], self.fits[label1].dc[:c]      - self.fits[label2].dc[:c])
+        ax4.plot(self.fits[label1].time[:c], self.fits[label1].amp[:c]     - self.fits[label2].amp[:c])
+        ax3.plot(self.fits[label1].time[:c], self.fits[label1].m[:c]       - self.fits[label2].m[:c])
+        ax2.plot(self.fits[label1].time[:c], self.fits[label1].phi[:c]     - self.fits[label2].phi[:c])
+        ax1.plot(self.fits[label1].time[:c], self.fits[label1].psi[:c]     - self.fits[label2].psi[:c], label=label1+'-'+label2)
 
         ax1.legend(loc='upper right')
         
@@ -1015,19 +1015,19 @@ class DeepFitFramework():
 
         self.fig, (ax1, ax2, ax3, ax4, ax5, ax6) = dfm_axes()           
 
-        ax6.semilogy(self.fits[label1].time, self.fits[label1].ssq);
-        ax5.plot(self.fits[label1].time, self.fits[label1].dc);
-        ax4.plot(self.fits[label1].time, self.fits[label1].amp);
-        ax3.plot(self.fits[label1].time, self.fits[label1].m);
-        ax2.plot(self.fits[label1].time, self.fits[label1].phi);
-        ax1.plot(self.fits[label1].time, self.fits[label1].psi, label=label1);
+        ax6.semilogy(self.fits[label1].time, self.fits[label1].ssq)
+        ax5.plot(self.fits[label1].time, self.fits[label1].dc)
+        ax4.plot(self.fits[label1].time, self.fits[label1].amp)
+        ax3.plot(self.fits[label1].time, self.fits[label1].m)
+        ax2.plot(self.fits[label1].time, self.fits[label1].phi)
+        ax1.plot(self.fits[label1].time, self.fits[label1].psi, label=label1)
 
-        ax6.semilogy(self.fits[label2].time, self.fits[label2].ssq, linestyle='dashed');
-        ax5.plot(self.fits[label2].time, self.fits[label2].dc, linestyle='dashed');
-        ax4.plot(self.fits[label2].time, self.fits[label2].amp, linestyle='dashed');
-        ax3.plot(self.fits[label2].time, self.fits[label2].m, linestyle='dashed');
-        ax2.plot(self.fits[label2].time, self.fits[label2].phi, linestyle='dashed');
-        ax1.plot(self.fits[label2].time, self.fits[label2].psi, linestyle='dashed', label=label2);
+        ax6.semilogy(self.fits[label2].time, self.fits[label2].ssq, linestyle='dashed')
+        ax5.plot(self.fits[label2].time, self.fits[label2].dc, linestyle='dashed')
+        ax4.plot(self.fits[label2].time, self.fits[label2].amp, linestyle='dashed')
+        ax3.plot(self.fits[label2].time, self.fits[label2].m, linestyle='dashed')
+        ax2.plot(self.fits[label2].time, self.fits[label2].phi, linestyle='dashed')
+        ax1.plot(self.fits[label2].time, self.fits[label2].psi, linestyle='dashed', label=label2)
 
         ax1.legend(loc='upper right')
         

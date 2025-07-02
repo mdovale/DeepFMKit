@@ -251,6 +251,14 @@ Modulation frequency: {}
         self.f_samp = float(values[1])
         self.f_mod  = float(values[2])
 
+    def plot(self, title=None, xrange=None, figsize=(20,5)):
+        
+        t_list = [np.arange(len(self.data))/self.f_samp]
+        y_list = [self.data]
+        
+        return time_plot(t_list, y_list, label_list=[self.label], xrange=xrange,\
+            title=title, y_label='Voltage(t)', figsize=figsize, remove_y_offsets=False, remove_time_offsets=False)
+
 
 class DeepFitObject():
     """Structure of data containing the fit parameters for a single channel,
@@ -407,20 +415,20 @@ Fit data rate: {}
 
         if timeaxis:
             ax6.set_xlabel('Time (s)')
-            ax6.semilogy(self.time, self.ssq);
-            ax5.plot(self.time, self.dc);
-            ax4.plot(self.time, self.amp);
-            ax3.plot(self.time, self.m);
-            ax2.plot(self.time, self.phi);
-            ax1.plot(self.time, self.psi, label=self.label);
+            ax6.semilogy(self.time, self.ssq)
+            ax5.plot(self.time, self.dc)
+            ax4.plot(self.time, self.amp)
+            ax3.plot(self.time, self.m)
+            ax2.plot(self.time, self.phi)
+            ax1.plot(self.time, self.psi, label=self.label)
         else:
             ax6.set_xlabel('Buffer count')
-            ax6.semilogy(self.ssq);
-            ax5.plot(self.dc);
-            ax4.plot(self.amp);
-            ax3.plot(self.m);
-            ax2.plot(self.phi);
-            ax1.plot(self.psi, label=self.label);
+            ax6.semilogy(self.ssq)
+            ax5.plot(self.dc)
+            ax4.plot(self.amp)
+            ax3.plot(self.m)
+            ax2.plot(self.phi)
+            ax1.plot(self.psi, label=self.label)
 
         if xrange is not None:
             ax1.set_xlim(xrange)
@@ -437,5 +445,6 @@ Fit data rate: {}
             autoscale_y(ax6)
         
         self.fig.tight_layout()
+        return (ax1, ax2, ax3, ax4, ax5, ax6)
 
 
