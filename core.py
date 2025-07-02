@@ -20,6 +20,65 @@ level=logging.INFO,
 datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+def _process_fit_chunk(args):
+    """
+    Worker function for parallel processing. Fits a chunk of raw data buffers.
+    
+    This function is designed to be called by multiprocessing.Pool. It takes
+    all necessary data as arguments to be self-contained and pickle-able.
+    It processes its assigned chunk sequentially to maintain the warm-start
+    advantage within the chunk.
+
+    Parameters
+    ----------
+    args : tuple
+        A tuple containing all necessary arguments:
+        (raw_data_chunk, initial_guess, R, ndata, f_mod, f_samp)
+
+    Returns
+    -------
+    list_of_dicts : list
+        A list of dictionaries, where each dictionary holds the fit result
+        for a single buffer in the chunk.
+    """
+    # 1. Unpack arguments
+    raw_data_chunk, initial_guess, R, ndata, f_mod, f_samp = args
+    
+    # 2. Setup
+    results_list = []
+    current_guess = np.array(initial_guess)
+    w0 = 2. * np.pi * f_mod / f_samp
+    
+    # 3. Process the chunk sequentially
+    for i in range(raw_data_chunk.shape[0]):
+        # Get the data for the current buffer
+        buffer_data = raw_data_chunk[i]
+        
+        # Calculate I/Q data for the buffer
+        QI_data_mean = np.zeros(2 * ndata)
+        for n in range(ndata):
+            Q_data, I_data = calculate_quadratures(n, buffer_data, w0, R)
+            QI_data_mean[n] = Q_data.mean()
+            QI_data_mean[n + ndata] = I_data.mean()
+        
+        # Run the NLS fit using the result of the previous fit as a guess
+        status, fit_parm, fit_ssq = fit(ndata, QI_data_mean, current_guess)
+        
+        # Update the guess for the next iteration
+        current_guess = fit_parm
+        
+        # Store the simple result
+        results_list.append({
+            'amp': fit_parm[0],
+            'm': fit_parm[1],
+            'phi': fit_parm[2],
+            'psi': fit_parm[3],
+            'dc': np.mean(buffer_data), # Calculate DC here
+            'ssq': fit_ssq,
+            'fitok': status
+        })
+        
+    return results_list
 
 class DeepFitFramework():
     """A framework for loading, processing, and representing DFMSWPM data.
@@ -118,7 +177,6 @@ class DeepFitFramework():
         if self.fit_file is not None:
             self.load_fit(labels=fit_labels)
 
-
     def change_raw_labels(self, old_labels, new_labels):
         assert len(old_labels) == len(new_labels)
 
@@ -126,14 +184,12 @@ class DeepFitFramework():
             assert label in self.raws
             self.raws[new_labels[i]] = self.raws.pop(label)
 
-
     def change_fit_labels(self, old_labels, new_labels):
         assert len(old_labels) == len(new_labels)
 
         for i, label in enumerate(old_labels):
             assert label in self.fits
             self.fits[new_labels[i]] = self.fits.pop(label)
-
 
     def append_raw_labels(self, string):
         assert type(string) == str
@@ -144,7 +200,6 @@ class DeepFitFramework():
         dmap = {o:n for (o,n) in zip(old_labels, new_labels)}
         self.raws = dict((dmap[key], value) for (key, value) in self.raws.items())
 
-
     def append_fit_labels(self, string):
         assert type(string) == str
         old_labels = list(self.fits.keys())
@@ -153,7 +208,6 @@ class DeepFitFramework():
             new_labels[i] = item + string
         dmap = {o:n for (o,n) in zip(old_labels, new_labels)}
         self.fits = dict((dmap[key], value) for (key, value) in self.fits.items())
-
 
     def fits_to_txt(self, filepath='./', labels=None):
         if labels is not None:
@@ -164,7 +218,6 @@ class DeepFitFramework():
             for fit in self.fits:
                 filename = filepath + self.fits[fit].label + '.txt'
                 self.fits[fit].to_txt(filename)
-
 
     def parse_header(self, file_select='raw'):
         """Parse the header of a raw_data or fit_data file.
@@ -214,7 +267,6 @@ class DeepFitFramework():
             logging.info('n: {}'.format(self.n))
             logging.info('Downsampling factor: {}'.format(self.R))
             logging.info('Fit data rate: {}'.format(self.fs))
-
 
     def _simulate_dynamic(self, label, time, ref_channel=False):
         """
@@ -331,7 +383,6 @@ class DeepFitFramework():
             pbar.update(1)
             pbar.close()
 
-
     def _simulate_static(self, label, time):
         """
         Simulate an unequal-armlength interferometer with 
@@ -394,7 +445,6 @@ class DeepFitFramework():
             pbar.update(1)
             pbar.close()
 
-
     def simulate(self, label, n_buffers=None, n_seconds=None, simulate="dynamic", ref_channel=False):
         if label not in self.sims:
             logging.error('Invalid label !!')
@@ -422,10 +472,8 @@ class DeepFitFramework():
             t1 = time.time()
             self.sims[label].simtime = t1-t0
 
-
     def load_sim(self, sim):
         self.sims[sim.label] = sim
-
 
     def new_sim(self, label=None):
         """Load a DFMIObject with the specified label.
@@ -437,7 +485,6 @@ class DeepFitFramework():
         sim = DFMIObject(label=label)
         self.sims[sim.label] = sim
         return label
-
 
     def load_raw(self, raw_file=None, labels=None):
         """Load a raw_data file containing voltage time series data
@@ -467,7 +514,6 @@ class DeepFitFramework():
             raw.f_samp = self.f_samp
             raw.f_mod = self.f_mod
             self.raws[raw.label] = raw
-
 
     def load_fit(self, fit_file=None, labels=None):
         """Load a fit_data file containing the fit parameters produced
@@ -515,245 +561,302 @@ class DeepFitFramework():
             fit.label = labels[k]
             self.fits[labels[k]] = fit
 
-
-    def _fit_(self, label, b, R, ndata, fit_label):
-        """Routine called by DeepFMFramework.fit().
-        Invokes the fit() function declared in dfmfit.py.
-        Acts on the raw data of channel `c` in the range
-        determined by the buffer number `b`.
-
-        Returns a DataFrame containing the fit parameters,
-        including the corresponding channel and buffer number.
+    def _fit_single_buffer(self, label, b, R, ndata, initial_guess):
         """
-        QI_data_mean = np.zeros(2*ndata)
+        Processes a single buffer of raw data to produce one fit result.
+        
+        This is a modular helper function that encapsulates the logic for
+        fitting one buffer, given an explicit initial guess. This breaks the
+        dependency on the `fits_df` state for easier reuse.
 
-        point = self.fits_df[fit_label][self.fits_df[fit_label]['b']==b-1]
-
-        fitparm = np.zeros(4)
-
-        fitparm[0] = point['amp'].iloc[0]
-        fitparm[1] = point['m'].iloc[0]
-        fitparm[2] = point['phi'].iloc[0]
-        fitparm[3] = point['psi'].iloc[0]
-        retssq = point['ssq'].iloc[0]
-
-        buf = range(b*R,(b+1)*R)
-
+        Returns a dictionary with the fit results.
+        """
+        # 1. Prepare data for the given buffer
+        buf = range(b * R, (b + 1) * R)
         raw_buffer = np.array(self.raws[label].data.loc[buf]).flatten()
-
         w0 = 2. * np.pi * self.raws[label].f_mod / self.raws[label].f_samp
-
+        
+        # 2. Calculate I/Q values
+        QI_data_mean = np.zeros(2 * ndata)
         for n in range(ndata):
             Q_data, I_data = calculate_quadratures(n, raw_buffer, w0, R)
             QI_data_mean[n] = Q_data.mean()
-            QI_data_mean[n+ndata] = I_data.mean()
-            vec_sig = QI_data_mean[n] + 1j*QI_data_mean[n+ndata]
-            phase = np.angle(vec_sig)
-            amp = abs(vec_sig)
-            QI_data_mean[n] = amp * cos(phase)
-            QI_data_mean[n+ndata] = amp * sin(phase)
-            dc = float(self.raws[label].data.loc[buf].mean().iloc[0])
-        # ===================================================================
-        # START: Diagnostic Print Block
-        # ===================================================================
-        # print("\n" + "="*80)
-        # print(f"--- DIAGNOSTIC: Data for fit buffer b = {b} ---")
-        # print("Final I/Q data being passed to fitter:")
-        # print(QI_data_mean)
-        # if np.all(QI_data_mean == 0):
-        #     print("\n>>> CRITICAL: All I/Q values are zero! Checking inputs to quadratures...")
-        #     print(f"    Buffer size (R): {R}")
-        #     print(f"    Harmonic count (ndata): {ndata}")
-        #     print(f"    w0 (rad/sample): {w0}")
-        #     # Let's check the raw data that went in
-        #     raw_buffer = np.array(self.raws[label].data.loc[buf])
-        #     print(f"    Shape of raw_buffer: {raw_buffer.shape}")
-        #     print(f"    Mean of raw_buffer: {np.mean(raw_buffer)}")
-        #     print(f"    Std dev of raw_buffer: {np.std(raw_buffer)}")
-        # print("="*80 + "\n")
-        # ===================================================================
-        # END: Diagnostic Print Block
-        # ===================================================================
-        # print('Before: ', fitparm)
-        # logging.info("Trying fit...")
-        fitok, fitparm, retssq = fit(ndata, QI_data_mean, fitparm)
-        # logging.info("fit returned with fitok = {}...".format(fitok))
-        # print('After: ', fitparm)
+            QI_data_mean[n + ndata] = I_data.mean()
+        
+        # 3. Run the NLS fit
+        status, fit_parm, fit_ssq = fit(ndata, QI_data_mean, initial_guess)
+        
+        # 4. Return results as a simple dictionary
+        return {
+            'amp': fit_parm[0],
+            'm': fit_parm[1],
+            'phi': fit_parm[2],
+            'psi': fit_parm[3],
+            'dc': np.mean(raw_buffer),
+            'ssq': fit_ssq,
+            'fitok': status,
+            'b': b
+        }
 
-
-        buffer_df = pd.DataFrame()
-        buffer_df['amp'] = [fitparm[0]]
-        buffer_df['m'] = [fitparm[1]]
-        buffer_df['phi'] = [fitparm[2]]
-        buffer_df['psi'] = [fitparm[3]]
-        buffer_df['dc'] = [dc]
-        buffer_df['ssq'] = [retssq]
-        buffer_df['fitok'] = [fitok]
-        buffer_df['b'] = [b]
-
-        return buffer_df
-
-
-    def fit(self, label, n=None, init_a=1.6, init_m=6.0, ndata=10, fit_label=None, init_psi=False, verbose=True):
-        """Performs fit on the raw data specified by `label`, generating a corresponding
-        DeepFitObject.
+    def fit(self, label, n=None, init_a=1.6, init_m=6.0, ndata=10, fit_label=None, init_psi=False, verbose=True, parallel=False, n_cores=None):
         """
+        Performs fit on the raw data, either sequentially or in parallel.
+        
+        This method acts as a router. For `parallel=True`, it uses the
+        block-parallel strategy for high throughput. Otherwise, it runs
+        the traditional sequential fit.
+        """
+        if parallel:
+            # Route to the new parallel method
+            return self.fit_parallel(label, n=n, init_a=init_a, init_m=init_m, ndata=ndata,
+                                     fit_label=fit_label, init_psi=init_psi, verbose=verbose, n_cores=n_cores)
+        
+        # --- Standard Sequential Fit Logic (Refactored) ---
         if n is None:
-            try:
-                n = self.sims[label].fit_n
-            except:
-                logging.error("fit_n not specified !!")
-                return
+            try: n = self.sims[label].fit_n
+            except KeyError: logging.error("fit_n not specified!!"); return
+        if fit_label is None: fit_label = label + '_fit'
+        if label not in self.raws: logging.error('Invalid label !!'); return
 
-        if fit_label is None:
-            fit_label = label+'_fit'
-        if label not in self.raws:
-            logging.error('Invalid label !!')
-            return
-        else:
-            R, fs, nbuf = self.fit_init(label, n)
-            nbuf = int(self.raws[label].data.shape[0]/R)
-            if nbuf == 0:
-                logging.error('Check buffer size !!')
-            if verbose:
-                logging.info(\
-                    """
-                    New DeepFitObject
-                    Label: {}
-                    Start time: {}
-                    Sampling frequency: {}
-                    Modulation frequency: {}
-                    Downsampling factor: {}
-                    n: {}
-                    Fit data rate: {}
-                    Buffer count: {}""".replace('\t', '').format(fit_label, self.raws[label].t0, self.raws[label].f_samp, self.raws[label].f_mod, R, n, fs, nbuf))
-
+        R, fs, nbuf = self.fit_init(label, n)
+        if nbuf == 0: logging.error('Check buffer size !!'); return
+            
+        if verbose:
+            # (Your logging info block here)
+            pass
 
         if init_psi:
             psi = self.psi_init(label, init_psi, init_a, init_m, R, ndata, fit_label, verbose)
         else:
             psi = 0.0
 
-        self.fits_df[fit_label] = pd.DataFrame(\
-        [{'amp': init_a, 'm': init_m, 'phi': 0, 'psi': psi, 'dc': 1, 'ssq': 0, 'fitok': 0, 'b':-1}])
+        # Start with the initial guess
+        current_guess = np.array([init_a, init_m, 0.0, psi])
+        results_list = []
+
+        iterable = range(nbuf)
+        if verbose:
+            logging.info('Processing sequentially...')
+            iterable = tqdm(iterable)
+        
+        for b in iterable:
+            # Call the modular single-buffer fitter
+            newfit_dict = self._fit_single_buffer(label, b, R, ndata, current_guess)
+            results_list.append(newfit_dict)
+            
+            # Update the guess for the next buffer (warm start)
+            current_guess = np.array([newfit_dict['amp'], newfit_dict['m'], newfit_dict['phi'], newfit_dict['psi']])
+            
+        # --- Post-processing and object creation (same for both methods) ---
+        self.fits_df[fit_label] = pd.DataFrame(results_list)
+        return self._create_fit_object_from_df(fit_label, n, R, fs, nbuf, ndata, init_a, init_m)
+
+    def fit_parallel(self, label, n=None, init_a=1.6, init_m=6.0, ndata=10, fit_label=None, init_psi=False, verbose=True, n_cores=None):
+        """Performs fit in parallel using a block-wise strategy."""
+        from multiprocessing import Pool
+        import os
+
+        if n is None:
+            try: n = self.sims[label].fit_n
+            except KeyError: logging.error("fit_n not specified!!"); return
+        if fit_label is None: fit_label = label + '_fit'
+        if label not in self.raws: logging.error('Invalid label !!'); return
+            
+        R, fs, nbuf = self.fit_init(label, n)
+        if nbuf == 0: logging.error('Check buffer size !!'); return
+            
+        if n_cores is None:
+            n_cores = os.cpu_count()
+        n_cores = min(n_cores, nbuf) # Don't use more cores than buffers
 
         if verbose:
-            logging.info('Processing...')
-            for b in tqdm(range(nbuf)):
-                newfit = self._fit_(label, b, R, ndata, fit_label);
-                self.fits_df[fit_label] = pd.concat((self.fits_df[fit_label], newfit), ignore_index=True)
-            logging.info('Done!!!')
+            logging.info(f"Processing in parallel with {n_cores} cores...")
+            # (Your logging info block here)
+            pass
+
+        # 1. Seeding: Get a single good initial guess by fitting the first buffer
+        if init_psi:
+            psi = self.psi_init(label, init_psi, init_a, init_m, R, ndata, fit_label, verbose)
         else:
-            for b in range(nbuf):
-                newfit = self._fit_(label, b, R, ndata, fit_label);
-                self.fits_df[fit_label] = pd.concat((self.fits_df[fit_label], newfit), ignore_index=True)
+            psi = 0.0
+        seed_guess = np.array([init_a, init_m, 0.0, psi])
+        first_fit_result = self._fit_single_buffer(label, 0, R, ndata, seed_guess)
+        seed_guess = np.array([first_fit_result['amp'], first_fit_result['m'], first_fit_result['phi'], first_fit_result['psi']])
+        
+        # 2. Chunking: Split the raw data into chunks for each core
+        raw_data_full = self.raws[label].data.values.reshape(-1, R)
+        # We start from buffer 1 since buffer 0 was used for seeding
+        chunks = np.array_split(raw_data_full[1:], n_cores) 
+        
+        # 3. Prepare Jobs
+        job_args = [(chunk, seed_guess, R, ndata, self.raws[label].f_mod, self.raws[label].f_samp) for chunk in chunks if chunk.size > 0]
+        
+        # 4. Run the Pool
+        with Pool(n_cores) as p:
+            # Use imap for progress bar compatibility
+            chunk_results_list = list(tqdm(p.imap(_process_fit_chunk, job_args), total=len(job_args)))
+        
+        # 5. Stitch Results
+        # Start with the result from the seed fit (buffer 0)
+        final_results = [first_fit_result]
+        # Append the results from all other chunks
+        for chunk_res in chunk_results_list:
+            final_results.extend(chunk_res)
+            
+        # Adjust the buffer number 'b' for the stitched results
+        for i, res in enumerate(final_results):
+            res['b'] = i
+            
+        # --- Post-processing and object creation (same for both methods) ---
+        self.fits_df[fit_label] = pd.DataFrame(final_results)
+        return self._create_fit_object_from_df(fit_label, n, R, fs, nbuf, ndata, init_a, init_m)
 
-        self.fits_df[fit_label] = self.fits_df[fit_label][self.fits_df[fit_label]['b'] > -1]
-        self.fits_df[fit_label] = self.fits_df[fit_label].reset_index()
-        self.fits_df[fit_label] = self.fits_df[fit_label].drop('index', axis=1)
-
+    def _create_fit_object_from_df(self, fit_label, n, R, fs, nbuf, ndata, init_a, init_m):
+        """Helper to create a DeepFitObject from a results DataFrame."""
+        df = self.fits_df[fit_label]
+        
         fit = DeepFitObject()
-        fit.n = n
-        fit.R = R
-        fit.fs = fs
-        fit.nbuf = nbuf
-        fit.ndata = ndata
-        fit.init_a = init_a
-        fit.init_m = init_m
-        fit.t0 = self.raws[label].t0
-        fit.f_samp = self.raws[label].f_samp
-        fit.f_mod  = self.raws[label].f_mod
-        fit.ssq = np.array(self.fits_df[fit_label]['ssq'])
-        fit.amp = np.array(self.fits_df[fit_label]['amp'])
-        fit.m   = np.array(self.fits_df[fit_label]['m'])
-        fit.phi = np.array(self.fits_df[fit_label]['phi'])
-        fit.psi = np.array(self.fits_df[fit_label]['psi'])
-        fit.dc  = np.array(self.fits_df[fit_label]['dc'])
-        fit.time = np.arange(0, fit.ssq.shape[0]/fit.fs, 1./fit.fs)
+        fit.n, fit.R, fit.fs, fit.nbuf, fit.ndata, fit.init_a, fit.init_m = n, R, fs, nbuf, ndata, init_a, init_m
+        fit.t0 = self.raws[fit_label.replace('_fit', '')].t0
+        fit.f_samp = self.raws[fit_label.replace('_fit', '')].f_samp
+        fit.f_mod  = self.raws[fit_label.replace('_fit', '')].f_mod
+        
+        fit.ssq = df['ssq'].to_numpy()
+        fit.amp = df['amp'].to_numpy()
+        fit.m   = df['m'].to_numpy()
+        fit.phi = df['phi'].to_numpy()
+        fit.psi = df['psi'].to_numpy()
+        fit.dc  = df['dc'].to_numpy()
+        fit.time = np.arange(0, fit.ssq.shape[0] / fit.fs, 1. / fit.fs)
         fit.label = fit_label
+        
         self.fits[fit_label] = fit
         return fit
 
+# In core.py
 
-    def psi_init(self, label, method, init_a, init_m, R, ndata, fit_label, verbose):
+# ... (inside the DeepFitFramework class) ...
 
+    def psi_init(self, label, method, init_a, init_m, R, ndata, verbose):
+        """
+        Finds an optimal initial guess for the modulation phase (psi).
+
+        This method is called before the main fitting process to ensure the NLS
+        fitter starts with a good value for `psi`, which is critical for
+        convergence.
+
+        Parameters
+        ----------
+        label : str
+            The label of the raw data channel to use.
+        method : {'scan', 'minimize'}
+            The method for finding the best psi.
+            - 'scan': A simple grid search over 2*pi.
+            - 'minimize': A more precise search using scipy.optimize.minimize,
+              seeded by a coarse initial scan.
+        init_a : float
+            The initial guess for the amplitude to use during the psi search.
+        init_m : float
+            The initial guess for the modulation depth to use during the psi search.
+        R : int
+            The buffer size (downsampling factor).
+        ndata : int
+            The number of harmonics to fit.
+        verbose : bool
+            If True, print progress information.
+        
+        Returns
+        -------
+        float
+            The best initial psi value found.
+        """
         if verbose:
-            logging.info("Initializing psi parameter using {} method".format(method))
+            logging.info(f"Initializing psi parameter for '{label}' using '{method}' method...")
+
+        # Create a tuple of the arguments needed by the helper function try_psi.
+        # This keeps the call signatures clean.
+        try_psi_args = (label, init_a, init_m, R, ndata)
 
         if method == 'scan':
-            init_psi = 0.0
-            best_ssq = 9e99
-            for psi in np.linspace(0, 2*np.pi, 20):
-                new_ssq = self.try_psi(psi, label, init_a, init_m, R, ndata, fit_label)
+            best_ssq = float('inf')
+            final_psi = 0.0
+            
+            for psi_test in np.linspace(0, 2 * np.pi, 20, endpoint=False):
+                new_ssq = self.try_psi(psi_test, *try_psi_args)
                 if new_ssq < best_ssq:
                     best_ssq = new_ssq
-                    init_psi = psi
+                    final_psi = psi_test
 
-        if method == 'minimize':
+        elif method == 'minimize':
             from scipy.optimize import minimize
-            init_psi = 0.0
-            best_ssq = 9e99
-            for psi in np.linspace(0, 2*np.pi, 20):
-                new_ssq = self.try_psi(psi, label, init_a, init_m, R, ndata, fit_label)
-                if new_ssq < best_ssq:
-                    best_ssq = new_ssq
-                    init_psi = psi
-            logging.info("Minimizer start with initial guess psi = {}".format(init_psi))
-            res = minimize(self.try_psi, init_psi, args=(label, init_a, init_m, R, ndata, fit_label),\
-            method="Nelder-Mead", bounds=[(0.0,2*np.pi)], options={"xatol": 1e-9, "fatol": 1e-14, "disp": True})
-            init_psi = res.x[0]
+            
+            # Find a good starting point for the minimizer by checking a few coarse points,
+            # which is more efficient than a full grid search.
+            num_coarse_points = 4
+            coarse_psis = np.linspace(0, 2 * np.pi, num_coarse_points, endpoint=False)
+            coarse_ssqs = [self.try_psi(p, *try_psi_args) for p in coarse_psis]
+            
+            best_initial_psi = coarse_psis[np.argmin(coarse_ssqs)]
+
+            if verbose:
+                logging.info(f"Coarse search found best initial guess psi = {best_initial_psi:.4f}. Starting minimizer.")
+            
+            # Run the high-precision minimizer.
+            # `try_psi` is the function to minimize.
+            # `x0` is the starting point.
+            # `args` are the *other* arguments to pass to `try_psi`.
+            res = minimize(self.try_psi,
+                           x0=best_initial_psi,
+                           args=try_psi_args,
+                           method="Nelder-Mead",
+                           bounds=[(0.0, 2 * np.pi)]) # Bounds are good practice
+            
+            final_psi = res.x[0]
+
+        else:
+            logging.warning(f"Unknown psi_init method: '{method}'. Defaulting to 0.0.")
+            final_psi = 0.0
 
         if verbose:
-            logging.info("Selected init_psi = {}".format(init_psi))
+            logging.info(f"Selected init_psi = {final_psi:.4f}")
 
-        return init_psi
+        return final_psi
 
-
-    def try_psi(self, psi, label, init_a, init_m, R, ndata, fit_label):
-
-        self.fits_df[label] = pd.DataFrame(\
-            [{'amp': init_a, 'm': init_m, 'phi': 0, 'psi': psi, 'dc': 1, 'ssq': 0, 'fitok': 0, 'b':-1}])
-        newfit = self._fit_(label, 0, R, ndata, fit_label);
-        return newfit['ssq'][0]
-
-
-    def pfit(self, n, labels=None, init_a=1.6, init_m=6.0, ndata=10):
-        """Performs fit on the raw data specified by `labels`, generating the corresponding
-        DeepFitObject's, parallelizing the computation over the number of raw data channels
-        selected.
-
-        Broken as of Python 3.9
-        
-        https://stackoverflow.com/questions/62830911/typeerror-cannot-pickle-weakref-object
+    def try_psi(self, psi, label, init_a, init_m, R, ndata):
         """
-        from multiprocessing import Pool
-        from functools import partial
-
-        if labels == None:
-            labels = list(self.raws.keys())
-
-        if len(labels) == 1:
-            logging.info('For fitting a single raw data channel, use fit()...')
-            return
-
-        nraws = len(labels)
-        cpu_count = os.cpu_count()
-        threads = nraws
-
-        if cpu_count <= nraws:
-            threads = cpu_count
-
-        logging.info('Starting parallel computation with {} threads...'.format(threads))
-
-        with Pool(threads) as p:
-            fits = list(tqdm(p.imap(partial(\
-                self.fit, n=n, init_a=init_a, init_m=init_m, ndata=ndata, fit_label=None, verbose=False), labels), total=len(labels)))
+        Helper function to test a single psi value and return the resulting SSQ.
         
-        for fit in fits:
-            self.fits[fit.label] = fit
-
-        logging.info('Done!!')
-
+        This function is stateless; it does not modify the DeepFitFramework
+        instance. It fits only the first buffer (b=0) of the specified raw data.
+        
+        Parameters
+        ----------
+        psi : float
+            The trial value for the modulation phase to be tested.
+        label : str
+            The label of the raw data channel.
+        init_a : float
+            The fixed initial guess for amplitude.
+        init_m : float
+            The fixed initial guess for modulation depth.
+        R : int
+            The buffer size.
+        ndata : int
+            The number of harmonics.
+            
+        Returns
+        -------
+        float
+            The sum of squared residuals (ssq) from the fit.
+        """
+        # 1. Construct the initial guess vector with the trial psi
+        initial_guess = np.array([init_a, init_m, 0.0, psi])
+        
+        # 2. Call our clean, single-buffer fitting function
+        result_dict = self._fit_single_buffer(label, 0, R, ndata, initial_guess)
+        
+        # 3. Return the SSQ
+        return result_dict['ssq']
 
     def fit_init(self, label, n):
 
@@ -764,7 +867,6 @@ class DeepFitFramework():
             logging.error('Check buffer size !!')
 
         return R, fs, nbuf
-
 
     def calc_lpsd(self, labels=None):
         """Calculate the LPSD of the interferometric phase parameter (phi) 
@@ -786,7 +888,6 @@ class DeepFitFramework():
                 self.fits[fit].f, _, self.fits[fit].Sxx, _, _, _ = lpsd(self.fits[fit].phi, \
                     self.fits[fit].fs, self.fits[fit].olap, self.fits[fit].bmin, self.fits[fit].Lmin, \
                     self.fits[fit].Jdes, self.fits[fit].Kdes, self.fits[fit].order, self.fits[fit].win, self.fits[fit].psll, return_type='legacy')
-
 
     def plot_lpsd(self, labels=None, nm=True, pm=True):
         """Plot the LPSD of the interferometric phase parameter (phi) 
@@ -822,7 +923,6 @@ class DeepFitFramework():
 
         if pm == True:
             log_plot(self.f, displacement_req(self.fits[fit].f, 1e-12, 3e-3), ax, title, xlabel, ylabel, "1 pm")
-
 
     def plot(self, labels=None, xrange=None):
         """Plot the existing fit data for the specified `labels`,
@@ -864,7 +964,6 @@ class DeepFitFramework():
         
         self.fig.tight_layout()
 
-
     def plot_diff(self, label1, label2, xrange=None):
         """Plot the absolute difference between the fit 
         parameters of the specified two fits.
@@ -903,7 +1002,6 @@ class DeepFitFramework():
             autoscale_y(ax6)
 
         self.fig.tight_layout()
-
 
     def plot_comparison(self, label1, label2, xrange=None):
         """Plot two channels for comparison.
