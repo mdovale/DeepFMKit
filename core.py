@@ -268,209 +268,218 @@ class DeepFitFramework():
             logging.info('Downsampling factor: {}'.format(self.R))
             logging.info('Fit data rate: {}'.format(self.fs))
 
-    def _simulate_dynamic(self, label, time, ref_channel=False):
+    def _generate_noise_arrays(self, sim_config, time_axis, seed=1):
         """
-        Simulate an unequal-armlength interferometer with
-        frequency-modulated input and armlength modulation
+        Helper function to generate all required noise time-series arrays.
 
-        Noise sources:
-            - laser frequency noise (1/f noise)
-            - additive amplitude noise (white noise)
-            - laser frequency modulation amplitude noise (white noise)
-            - armlength modulation amplitude noise (white noise)
+        This version is optimized to minimize expensive calls to the noise
+        generation library. It generates one "basis" noise for each unique
+        spectral shape (alpha value) and scales it to produce the final
+        noise arrays. This also fixes a bug where all noise sources were
+        spuriously correlated due to a fixed random seed.
         """
+        num_samples = len(time_axis)
+        fs = sim_config.f_samp
+        
+        # --- The "Basis Noise" Generation ---
+        # Group noise sources by their spectral shape (alpha)
+        noise_params = {
+            'laser_frequency': {'asd': sim_config.f_n, 'alpha': 1.0},
+            'amplitude': {'asd': sim_config.amp_n, 'alpha': 0.01},
+            'df': {'asd': sim_config.df_n, 'alpha': 0.01},
+            'armlength': {'asd': sim_config.arml_mod_n, 'alpha': 1.0}
+        }
+        
+        # This dictionary will hold the single, unit-variance basis noise
+        # for each unique alpha value.
+        basis_noises = {}
+        
+        # Use a different seed for each spectral shape to ensure independence
+        seed_counter = seed 
+        
+        for name, params in noise_params.items():
+            alpha_val = params['alpha']
+            # If we haven't already generated noise for this alpha, do it now.
+            if alpha_val not in basis_noises and params['asd'] != 0:
+                logging.info(f"Generating basis noise for alpha = {alpha_val}...")
+                generator = pyplnoise.AlphaNoise(fs, fs / num_samples, fs / 2, alpha=alpha_val, seed=seed_counter)
+                # Generate one unit-variance time series
+                basis_noises[alpha_val] = generator.get_series(num_samples)
+                seed_counter += 1
 
-        def alpha(fs, size, asd, alpha=1, seed=1):
-            generator = pyplnoise.AlphaNoise(fs, fs/size, fs/2, alpha=alpha, seed=seed)
-            return asd / np.sqrt(2) * generator.get_series(size)
-
-        def downsample(signal, R):
-            nbuf = int(len(signal)/R)
-            signal_downsampled = np.zeros(nbuf)
-            for b in range(nbuf):
-                signal_downsampled[b] = np.mean(signal[range(b*R,(b+1)*R)])
-            return signal_downsampled
-
-        with tqdm(total=6) as pbar:
-
-            if self.sims[label].f_n != 0:
-                laser_frequency_noise = alpha(self.sims[label].f_samp, len(time), self.sims[label].f_n, alpha=1)
+        # --- Scale the Basis Noises to Create Final Noise Arrays ---
+        final_noise = {}
+        for name, params in noise_params.items():
+            asd = params['asd']
+            alpha_val = params['alpha']
+            if asd != 0 and alpha_val in basis_noises:
+                # Scale the unit-variance basis noise by the required ASD.
+                # The 1/sqrt(2) factor is part of the ASD definition.
+                final_noise[name] = asd / np.sqrt(2) * basis_noises[alpha_val]
             else:
-                laser_frequency_noise = 0.0
+                final_noise[name] = 0.0 # Assign zero if ASD is zero
+                
+        return final_noise
 
-            pbar.update(1)
+    def _vectorized_downsample(self, signal, R):
+        """
+        Vectorized downsampling function using NumPy's reshape and mean.
+        """
+        # Trim the signal so its length is a multiple of R
+        trimmed_len = (len(signal) // R) * R
+        trimmed_signal = signal[:trimmed_len]
+        # Reshape into a 2D array and take the mean along the new axis
+        return trimmed_signal.reshape(-1, R).mean(axis=1)
 
-            if self.sims[label].amp_n != 0:
-                amplitude_noise = alpha(self.sims[label].f_samp, len(time), self.sims[label].amp_n, alpha=0.01)
-            else:
-                amplitude_noise = 0.0
+    def _run_static_simulation(self, sim_config, time_axis, noise_arrays):
+        """
+        Core physics engine for static simulation. Returns the signal array.
+        Uses the simplified/approximated DFMI signal model.
+        """
+        # Unpack parameters for clarity
+        A = sim_config.amp
+        C = sim_config.visibility
+        tau_r = sim_config.ref_arml / sc.c
+        tau_m = sim_config.meas_arml / sc.c
+        
+        # Calculate modulation depth with noise
+        m_noisy = 2 * np.pi * (sim_config.df + noise_arrays['df']) * (tau_m - tau_r)
+        
+        # Calculate total phase
+        phitot = sim_config.phi + m_noisy * np.cos(2 * np.pi * sim_config.f_mod * time_axis + sim_config.psi)
+        # Add laser frequency noise contribution
+        phitot += 2 * np.pi * noise_arrays['laser_frequency'] * (tau_m - tau_r)
+        
+        # Calculate final signal
+        y = A + noise_arrays['amplitude'] + A * C * np.cos(phitot)
+        
+        return y
 
-            pbar.update(1)
-
-            if self.sims[label].df_n != 0:
-                df_noise = alpha(self.sims[label].f_samp, len(time), self.sims[label].df_n, alpha=0.01)
-            else:
-                df_noise = 0.0
-
-            pbar.update(1)
-
-            if self.sims[label].arml_mod_n != 0:
-                arml_noise = alpha(self.sims[label].f_samp, len(time), self.sims[label].arml_mod_n, alpha=1)
-            else:
-                arml_noise = 0.0
-
-            pbar.update(1)
-
-            omega_0 = 2*np.pi*(sc.c/self.sims[label].wavelength + laser_frequency_noise)
-            omega_tm = 2*np.pi*self.sims[label].arml_mod_f
-
-            tau_r = self.sims[label].ref_arml/sc.c
-            tau_m = self.sims[label].meas_arml/sc.c
-
-            tau_dl = (0.5*self.sims[label].arml_mod_amp*np.sin(omega_tm*time + self.sims[label].arml_mod_psi)\
-                + arml_noise + self.sims[label].phi * (self.sims[label].wavelength) / (2*np.pi)) / sc.c
+    def _run_dynamic_simulation(self, sim_config, time_axis, noise_arrays):
+        """
+        Core physics engine for dynamic simulation. Returns signal arrays.
+        Uses the full, non-approximated DFMI signal model.
+        """
+        # --- 1. Pre-calculate common terms ---
+        omega_0_noisy = 2 * np.pi * (sc.c / sim_config.wavelength + noise_arrays['laser_frequency'])
+        omega_mod = 2 * np.pi * sim_config.f_mod
+        df_noisy = sim_config.df + noise_arrays['df']
+        
+        # --- 2. Calculate main channel parameters and phase ---
+        tau_r = sim_config.ref_arml / sc.c
+        tau_m = sim_config.meas_arml / sc.c
+        
+        # Time-varying path length difference
+        tau_dl = (0.5 * sim_config.arml_mod_amp * np.sin(2 * np.pi * sim_config.arml_mod_f * time_axis + sim_config.arml_mod_psi)
+                  + noise_arrays['armlength'] + sim_config.phi * sim_config.wavelength / (2 * np.pi)) / sc.c
+        
+        # These are the fundamental building blocks of the phase modulation
+        sin_term_meas = np.sin(omega_mod * (time_axis - tau_m - tau_dl) + sim_config.psi)
+        sin_term_ref = np.sin(omega_mod * (time_axis - tau_r) + sim_config.psi)
+        
+        # Calculate total phase for the main channel
+        phi_static = omega_0_noisy * (tau_m - tau_r + tau_dl)
+        phi_mod = (df_noisy / sim_config.f_mod) * (sin_term_meas - sin_term_ref)
+        phitot_main = phi_static + phi_mod
+        
+        # Final signal for the main channel
+        y_main = sim_config.amp + noise_arrays['amplitude'] + sim_config.amp * sim_config.visibility * np.cos(phitot_main)
+        
+        # --- 3. Calculate reference channel signal (if requested) ---
+        y_ref = None
+        if sim_config.refifo_opd_factor != 0:
+            # REUSE common terms, only recalculate what's different
+            tau_r_ref = tau_r * sim_config.refifo_opd_factor
+            tau_m_ref = tau_m * sim_config.refifo_opd_factor
             
-            phi = omega_0*(tau_m - tau_r + tau_dl)
-            phi_s = 2*np.pi*(sc.c/self.sims[label].wavelength)*(tau_m - tau_r + tau_dl)
+            # Recalculate only the delayed sine terms for the reference IFO
+            sin_term_meas_ref = np.sin(omega_mod * (time_axis - tau_m_ref) + sim_config.psi)
+            sin_term_ref_ref = np.sin(omega_mod * (time_axis - tau_r_ref) + sim_config.psi)
 
-            phitot = phi + ((self.sims[label].df+df_noise)/self.sims[label].f_mod) \
-            * (np.sin(2*np.pi*self.sims[label].f_mod*(time-tau_m-tau_dl) + self.sims[label].psi) - 
-                np.sin(2*np.pi*self.sims[label].f_mod*(time-tau_r) + self.sims[label].psi) )
+            phi_static_ref = omega_0_noisy * (tau_m_ref - tau_r_ref)
+            phi_mod_ref = (df_noisy / sim_config.f_mod) * (sin_term_meas_ref - sin_term_ref_ref)
+            phitot_ref = phi_static_ref + phi_mod_ref
+            
+            y_ref = sim_config.amp + noise_arrays['amplitude'] + sim_config.amp * sim_config.visibility * np.cos(phitot_ref)
 
-            y = self.sims[label].amp + amplitude_noise + self.sims[label].amp*self.sims[label].visibility*np.cos(phitot)
+        # Also return the ground-truth phase for analysis
+        phi_s_ground_truth = 2 * np.pi * (sc.c / sim_config.wavelength) * (tau_m - tau_r + tau_dl)
 
-            if ref_channel:
-                tau_r = self.sims[label].ref_arml*self.sims[label].refifo_opd_factor/sc.c
-                tau_m = self.sims[label].meas_arml*self.sims[label].refifo_opd_factor/sc.c
-                phiref = omega_0*(tau_m - tau_r) + ((self.sims[label].df+df_noise)/self.sims[label].f_mod) \
-                * (np.sin(2*np.pi*self.sims[label].f_mod*(time-tau_m) + self.sims[label].psi) - 
-                    np.sin(2*np.pi*self.sims[label].f_mod*(time-tau_r) + self.sims[label].psi) )
-                y_ref = self.sims[label].amp + amplitude_noise + self.sims[label].amp*self.sims[label].visibility*np.cos(phiref)
+        return y_main, y_ref, phitot_main, phi_s_ground_truth
 
-            pbar.update(1)
-            raw = DeepRawObject(data=pd.DataFrame(y, columns=["ch0"]))
-            raw.label = label
-            raw.f_samp = self.sims[label].f_samp
-            raw.f_mod = self.sims[label].f_mod
-            raw.phi = phitot
-            raw.phi_sim = phi_s
-            raw.phi_sim_downsamp = downsample(phi_s, self.sims[label].R)
-            raw.f_noise = laser_frequency_noise
-            raw.a_noise = amplitude_noise
-            raw.l_noise = arml_noise
-            raw.df_noise = df_noise
-            self.raws[raw.label] = raw
-
-            if ref_channel:
-                raw = DeepRawObject(data=pd.DataFrame(y_ref, columns=["ch0"]))
-                raw.label = label + '_ref'
-                raw.f_samp = self.sims[label].f_samp
-                raw.f_mod = self.sims[label].f_mod
-                raw.phi = phitot
-                raw.phi_sim = phi_s
-                raw.phi_sim_downsamp = downsample(phi_s, self.sims[label].R)
-                raw.f_noise = laser_frequency_noise
-                raw.a_noise = amplitude_noise
-                raw.l_noise = arml_noise
-                raw.df_noise = df_noise
-                self.raws[raw.label] = raw
-                self.sims[raw.label] = copy.deepcopy(self.sims[label])
-                self.sims[raw.label].label = raw.label
-                self.sims[raw.label].ref_arml = self.sims[label].ref_arml*self.sims[label].refifo_opd_factor
-                self.sims[raw.label].meas_arml = self.sims[label].meas_arml*self.sims[label].refifo_opd_factor
-                self.sims[raw.label].m = self.sims[label].m*self.sims[label].refifo_opd_factor
-
-            pbar.update(1)
-            pbar.close()
-
-    def _simulate_static(self, label, time):
+    def simulate(self, label, n_buffers=None, n_seconds=None, simulate="dynamic", ref_channel=False, seed=1):
         """
-        Simulate an unequal-armlength interferometer with 
-        frequency-modulated input and static arms
-
-        Noise sources:
-            - laser frequency noise (1/f noise)
-            - additive amplitude noise (white noise)
-            - laser frequency modulation amplitude noise (white noise)
+        Main entry point for running a simulation.
+        
+        This method prepares the time axis and parameters, calls the appropriate
+        simulation engine (_run_static_simulation or _run_dynamic_simulation),
+        and populates the resulting DeepRawObject(s).
         """
-
-        def alpha(fs, size, asd, alpha=1, seed=1):
-            generator = pyplnoise.AlphaNoise(fs, fs/size, fs/2, alpha=alpha, seed=seed)
-            return asd / np.sqrt(2) * generator.get_series(size)
-
-        with tqdm(total=5) as pbar:
-
-            if self.sims[label].f_n != 0:
-                laser_frequency_noise = alpha(self.sims[label].f_samp, len(time), self.sims[label].f_n, alpha=1)
-            else:
-                laser_frequency_noise = 0.0
-
-            pbar.update(1)
-
-            if self.sims[label].amp_n != 0:
-                amplitude_noise = alpha(self.sims[label].f_samp, len(time), self.sims[label].amp_n, alpha=0.01)
-            else:
-                amplitude_noise = 0.0
-
-            pbar.update(1)
-
-            if self.sims[label].df_n != 0:
-                df_noise = alpha(self.sims[label].f_samp, len(time), self.sims[label].df_n, alpha=0.01)
-            else:
-                df_noise = 0.0
-
-            pbar.update(1)
-
-            A = self.sims[label].amp
-            C = self.sims[label].visibility
-            tau_r = self.sims[label].ref_arml/sc.c
-            tau_m = self.sims[label].meas_arml/sc.c
-            m = 2*np.pi*(self.sims[label].df+df_noise)*(tau_m - tau_r)
-
-            phitot = self.sims[label].phi + m * np.cos(2*np.pi*self.sims[label].f_mod*time + self.sims[label].psi)
-            phitot = phitot + 2*np.pi*laser_frequency_noise*(tau_m - tau_r)
-
-            y = A + amplitude_noise + A*C*np.cos(phitot)
-            pbar.update(1)
-
-            raw = DeepRawObject(data=pd.DataFrame(y, columns=["ch0"]))
-            raw.label = label
-            raw.f_samp = self.sims[label].f_samp
-            raw.f_mod = self.sims[label].f_mod
-            raw.f_noise = laser_frequency_noise
-            raw.a_noise = amplitude_noise
-            raw.df_noise = df_noise
-            self.raws[raw.label] = raw
-
-            pbar.update(1)
-            pbar.close()
-
-    def simulate(self, label, n_buffers=None, n_seconds=None, simulate="dynamic", ref_channel=False):
         if label not in self.sims:
-            logging.error('Invalid label !!')
-            return
+            logging.error(f"Invalid simulation label: '{label}' !!"); return
 
-        self.sims[label].fit_n = self.sims[label]._fit_n
-
+        sim_config = self.sims[label]
+        
+        # --- 1. Prepare Time Axis ---
         if n_buffers is not None:
-            taxis = np.arange(n_buffers*self.sims[label].fit_n*self.sims[label].f_samp/self.sims[label].f_mod) / self.sims[label].f_samp
+            num_samples = int(n_buffers * sim_config.fit_n * sim_config.f_samp / sim_config.f_mod)
         elif n_seconds is not None:
-            taxis = np.arange(n_seconds*self.sims[label].f_samp) / self.sims[label].f_samp
+            num_samples = int(n_seconds * sim_config.f_samp)
         else:
-            taxis = np.arange(self.sims[label].N) / self.sims[label].f_samp
+            num_samples = sim_config.N
+            
+        time_axis = np.arange(num_samples) / sim_config.f_samp
+        sim_config.N = len(time_axis)
 
-        self.sims[label].N = len(taxis)
-
+        # --- 2. Run Simulation ---
+        t0 = time.time()
+        logging.info(f"Simulating '{label}' ({simulate}) for {len(time_axis)/sim_config.f_samp:.2f} seconds...")
+        
+        noise = self._generate_noise_arrays(sim_config, time_axis, seed=seed)
+        
         if simulate == "dynamic":
-            t0 = time.time()
-            self._simulate_dynamic(label, taxis, ref_channel)
-            t1 = time.time()
-            self.sims[label].simtime = t1-t0
-        else:
-            t0 = time.time()
-            self._simulate_static(label, taxis)
-            t1 = time.time()
-            self.sims[label].simtime = t1-t0
+            y_main, y_ref, phitot, phi_s = self._run_dynamic_simulation(sim_config, time_axis, noise)
+        else: # static
+            y_main = self._run_static_simulation(sim_config, time_axis, noise)
+            y_ref, phitot, phi_s = None, None, None # Not available in static sim
+
+        t1 = time.time()
+        sim_config.simtime = t1 - t0
+        logging.info(f"Simulation finished in {sim_config.simtime:.3f} s.")
+
+        # --- 3. Create and store result objects ---
+        # Main channel
+        raw_main = DeepRawObject(data=pd.DataFrame(y_main, columns=["ch0"]))
+        raw_main.label, raw_main.f_samp, raw_main.f_mod = label, sim_config.f_samp, sim_config.f_mod
+        raw_main.sim = sim_config
+        # Store ground truth signals for analysis
+        raw_main.phi = phitot
+        raw_main.phi_sim = phi_s
+        if phi_s is not None:
+            raw_main.phi_sim_downsamp = self._vectorized_downsample(phi_s, sim_config.R)
+        raw_main.f_noise, raw_main.a_noise, raw_main.l_noise, raw_main.df_noise = (
+            noise['laser_frequency'], noise['amplitude'], noise['armlength'], noise['df'])
+        self.raws[label] = raw_main
+
+        # Reference channel (if created)
+        if ref_channel and y_ref is not None:
+            ref_label = label + '_ref'
+            raw_ref = DeepRawObject(data=pd.DataFrame(y_ref, columns=["ch0"]))
+            raw_ref.label, raw_ref.f_samp, raw_ref.f_mod = ref_label, sim_config.f_samp, sim_config.f_mod
+            
+            # Create a new, distinct sim config for the reference channel
+            ref_sim_config = copy.deepcopy(sim_config)
+            ref_sim_config.label = ref_label
+            ref_sim_config.ref_arml *= sim_config.refifo_opd_factor
+            ref_sim_config.meas_arml *= sim_config.refifo_opd_factor
+            # Recalculate 'm' for the new arm lengths
+            ref_sim_config.m = 2 * np.pi * ref_sim_config.df * (ref_sim_config.meas_arml - ref_sim_config.ref_arml) / sc.c
+            self.sims[ref_label] = ref_sim_config
+            raw_ref.sim = ref_sim_config
+            
+            # Store noise signals (they are common to both channels)
+            raw_ref.f_noise, raw_ref.a_noise = noise['laser_frequency'], noise['amplitude']
+            self.raws[ref_label] = raw_ref
 
     def load_sim(self, sim):
         self.sims[sim.label] = sim
@@ -598,7 +607,7 @@ class DeepFitFramework():
             'b': b
         }
 
-    def fit(self, label, n=None, init_a=1.6, init_m=6.0, ndata=10, fit_label=None, init_psi=False, verbose=True, parallel=False, n_cores=None):
+    def fit(self, label, n=None, init_a=1.6, init_m=6.0, ndata=10, fit_label=None, init_psi=False, verbose=True, parallel=True, n_cores=None):
         """
         Performs fit on the raw data, either sequentially or in parallel.
         
@@ -649,7 +658,7 @@ class DeepFitFramework():
             
         # --- Post-processing and object creation (same for both methods) ---
         self.fits_df[fit_label] = pd.DataFrame(results_list)
-        return self._create_fit_object_from_df(fit_label, n, R, fs, nbuf, ndata, init_a, init_m)
+        return self._create_fit_object_from_df(fit_label, label, n, R, fs, nbuf, ndata, init_a, init_m)
 
     def fit_parallel(self, label, n=None, init_a=1.6, init_m=6.0, ndata=10, fit_label=None, init_psi=False, verbose=True, n_cores=None):
         """Performs fit in parallel using a block-wise strategy."""
@@ -709,17 +718,18 @@ class DeepFitFramework():
             
         # --- Post-processing and object creation (same for both methods) ---
         self.fits_df[fit_label] = pd.DataFrame(final_results)
-        return self._create_fit_object_from_df(fit_label, n, R, fs, nbuf, ndata, init_a, init_m)
+        return self._create_fit_object_from_df(fit_label, label, n, R, fs, nbuf, ndata, init_a, init_m)
 
-    def _create_fit_object_from_df(self, fit_label, n, R, fs, nbuf, ndata, init_a, init_m):
+    def _create_fit_object_from_df(self, fit_label, source_label, n, R, fs, nbuf, ndata, init_a, init_m):
         """Helper to create a DeepFitObject from a results DataFrame."""
         df = self.fits_df[fit_label]
         
         fit = DeepFitObject()
         fit.n, fit.R, fit.fs, fit.nbuf, fit.ndata, fit.init_a, fit.init_m = n, R, fs, nbuf, ndata, init_a, init_m
-        fit.t0 = self.raws[fit_label.replace('_fit', '')].t0
-        fit.f_samp = self.raws[fit_label.replace('_fit', '')].f_samp
-        fit.f_mod  = self.raws[fit_label.replace('_fit', '')].f_mod
+
+        fit.t0 = self.raws[source_label].t0
+        fit.f_samp = self.raws[source_label].f_samp
+        fit.f_mod  = self.raws[source_label].f_mod
         
         fit.ssq = df['ssq'].to_numpy()
         fit.amp = df['amp'].to_numpy()
@@ -732,10 +742,6 @@ class DeepFitFramework():
         
         self.fits[fit_label] = fit
         return fit
-
-# In core.py
-
-# ... (inside the DeepFitFramework class) ...
 
     def psi_init(self, label, method, init_a, init_m, R, ndata, verbose):
         """

@@ -1,9 +1,3 @@
-try:
-    profile
-except NameError:
-    def profile(func):
-        return func
-
 from .goto import with_goto
 
 import numpy as np
@@ -24,7 +18,6 @@ M_GRID_STEP = 0.5
 BESSEL_AMP_THRESHOLD = 0.05
 SINCOS_AMP_THRESHOLD = 0.1
 
-@profile
 def calculate_quadratures(n, data, w0, bufferSize):
     """Calculate the in-phase (Q) and quadrature (I) components of a signal.
 
@@ -78,7 +71,6 @@ def calculate_quadratures(n, data, w0, bufferSize):
 
     return Q_data, I_data
 
-@profile
 def coeffs(ndata, data, param):
     """
     Calculate the sum-of-squares, Jacobian (J^T*J), and gradient (J^T*r).
@@ -168,7 +160,6 @@ def coeffs(ndata, data, param):
 
     return ssq, JTJ.flatten(), gradient
 
-@profile
 def ssqf(ndata, data, param):
     """
     A minimal, fast, vectorized function to calculate only the SSQ.
@@ -186,7 +177,6 @@ def ssqf(ndata, data, param):
     residuals = np.concatenate([data[:ndata] - model_q, data[ndata:] - model_i])
     return np.dot(residuals, residuals)
 
-@profile
 def msolve(lam, a_g_mat, b_g_mat):
     """Solves the Levenberg-Marquardt matrix equation.
 
@@ -226,7 +216,6 @@ def msolve(lam, a_g_mat, b_g_mat):
         
     return dp
 
-@profile
 def _run_lma_fit(ndata, data, initial_guess):
     """
     Executes the core Levenberg-Marquardt loop until convergence.
@@ -279,7 +268,6 @@ def _run_lma_fit(ndata, data, initial_guess):
             
     return parm, ssq0 # Return the final converged state
 
-@profile
 def _find_best_initial_guess(ndata, data):
     """
     Performs a grid search over 'm' to find a promising initial guess
@@ -342,7 +330,6 @@ def _find_best_initial_guess(ndata, data):
 
     return best_parm_guess
 
-@profile
 def fit(ndata, data, parm):
     """
     Main entry point for the NLS fitting algorithm.
