@@ -372,10 +372,9 @@ Fit data rate: {}
     def calc_lpsd(self):
         """Calculate LPSD of interferometric phase parameter (phi).
         """
-        import lpsd
-        lpsd.use_c_core = True
-        self.f, _, self.Sxx, _, _, _ = lpsd.lpsd(self.phi, \
-            self.fs, self.olap, self.bmin, self.Lmin, self.Jdes, self.Kdes, self.order, self.win, self.psll)
+        from spectools.lpsd import lpsd
+        self.f, _, self.Sxx, _, _, _ = lpsd(self.phi, \
+            self.fs, self.olap, self.bmin, self.Lmin, self.Jdes, self.Kdes, self.order, self.win, self.psll, return_type='legacy')
 
 
     def plot_lpsd(self, nm=True, pm=True):

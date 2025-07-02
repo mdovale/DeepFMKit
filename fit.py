@@ -1,3 +1,9 @@
+try:
+    profile
+except NameError:
+    def profile(func):
+        return func
+
 from .goto import with_goto
 
 import numpy as np
@@ -23,7 +29,7 @@ SINLIM = 0.1 # default 0.1
 DBL_EPSILON = 2.2204460492503131e-16
 
 
-
+@profile
 def calculate_quadratures(n, data, w0, bufferSize):
     Q_data = np.zeros(bufferSize)
     I_data = np.zeros(bufferSize)
@@ -46,11 +52,11 @@ def calculate_quadratures(n, data, w0, bufferSize):
 
     return Q_data, I_data
 
-
+@profile
 def mean_filter(signal):
 	return signal.mean()
 
-
+@profile
 def coeffs(ndata, data, param):
     a = param[0]
     m = param[1]
@@ -132,7 +138,7 @@ def coeffs(ndata, data, param):
     return ssq, a_g_mat, b_g_mat
 
 
-
+@profile
 def gaussj(a, n, b):
     ipiv = np.zeros(n)
     indxr = np.zeros(NPARMS)
@@ -187,7 +193,7 @@ def gaussj(a, n, b):
     return a, b
 
 
-
+@profile
 def linsolve(a, n, b):
     res = np.zeros(NPARMS)
 
@@ -233,7 +239,7 @@ def linsolve(a, n, b):
     return a, b
 
 
-
+@profile
 def ssqf(ndata, data, param):
     bes = np.zeros(MAXDATA + 3)
     sincos = np.zeros(4)
@@ -262,7 +268,7 @@ def ssqf(ndata, data, param):
     return c2
 
 
-
+@profile
 def msolve(lam, a_g_mat, b_g_mat):
     a2 = a_g_mat.copy()
 
@@ -278,7 +284,7 @@ def msolve(lam, a_g_mat, b_g_mat):
     return dp
 
 
-
+@profile
 def brentfunc(x, ndata, data, p, a_g_mat, b_g_mat):
     px = p + msolve(exp(x), a_g_mat, b_g_mat)
     sqtry = ssqf(ndata, data, px)
@@ -286,7 +292,7 @@ def brentfunc(x, ndata, data, p, a_g_mat, b_g_mat):
     return sqtry, px
 
 
-
+@profile
 def brentfunc2(x, ndata, data, p, a_g_mat, b_g_mat):
     px = p + msolve(exp(x), a_g_mat, b_g_mat)
     sqtry = ssqf(ndata, data, px)
@@ -294,7 +300,7 @@ def brentfunc2(x, ndata, data, p, a_g_mat, b_g_mat):
     return sqtry
 
 
-
+@profile
 @with_goto
 def LISOfmin(ax, bx, tol, ndata, data, parm, a_g_mat, b_g_mat):
     from numpy import sqrt
@@ -447,7 +453,7 @@ def LISOfmin(ax, bx, tol, ndata, data, parm, a_g_mat, b_g_mat):
     return x
 
 
-
+@profile
 def marq4(ndata, data, parm):
 
     ssq0, a_g_mat, b_g_mat = coeffs(ndata, data, parm)
@@ -462,7 +468,7 @@ def marq4(ndata, data, parm):
 
     return parm, ssq, ssq0 - ssq1
 
-
+@profile
 def marq4_v2(ndata, data, parm):
 
     ssq0, a_g_mat, b_g_mat = coeffs(ndata, data, parm)
@@ -477,7 +483,7 @@ def marq4_v2(ndata, data, parm):
 
     return parm, ssq, ssq0 - ssq1
 
-
+@profile
 def fit(ndata, data, parm):
     nsteps = 0
 

@@ -110,7 +110,6 @@ class DeepFitFramework():
         self.ndata = 10            # Number of higher harmonics to fit
         self.init_a = 1.6          # Initial value of the amplitude
         self.init_m = 6.0          # Initial value of the effective modulation index
-        self.c_core_loaded = False
         self.cfit = None
 
         if self.raw_file is not None:
@@ -517,7 +516,7 @@ class DeepFitFramework():
             self.fits[labels[k]] = fit
 
 
-    def _fit_(self, label, b, R, ndata, use_c_core, fit_label):
+    def _fit_(self, label, b, R, ndata, fit_label):
         """Routine called by DeepFMFramework.fit().
         Invokes the fit() function declared in dfmfit.py.
         Acts on the raw data of channel `c` in the range
@@ -526,19 +525,6 @@ class DeepFitFramework():
         Returns a DataFrame containing the fit parameters,
         including the corresponding channel and buffer number.
         """
-        if (use_c_core)&(self.c_core_loaded==False):
-            dll_name = "fit.so"
-            dll_abs_path = os.path.dirname(os.path.abspath(__file__)) + os.path.sep + dll_name
-            lib = ct.CDLL(dll_abs_path, use_last_error=True)
-            ndpointer = np.ctypeslib.ndpointer
-            self.cfit = lib.fit # fit (int ndata, double *data, double *parm, double *retssq)
-            self.cfit.restype = int
-            self.cfit.argtypes = [ct.c_int,
-                            ndpointer(ct.c_double, flags="C_CONTIGUOUS"),
-                            ndpointer(ct.c_double, flags="C_CONTIGUOUS"),
-                            ct.POINTER(ct.c_double)]
-            self.c_core_loaded = True
-
         QI_data_mean = np.zeros(2*ndata)
 
         point = self.fits_df[fit_label][self.fits_df[fit_label]['b']==b-1]
@@ -566,16 +552,9 @@ class DeepFitFramework():
             QI_data_mean[n+ndata] = amp * sin(phase)
             dc = float(self.raws[label].data.loc[buf].mean().iloc[0])
         # print('Before: ', fitparm)
-        if use_c_core:
-            # logging.info("Trying cfit...")
-            cretssq = ct.c_double(float(retssq))
-            fitok = self.cfit(ct.c_int(ndata), QI_data_mean, fitparm, ct.byref(cretssq))
-            # logging.info("cfit returned with fitok = {}...".format(fitok))
-            retssq = cretssq.value
-        else:
-            # logging.info("Trying fit...")
-            fitok, fitparm, retssq = fit(ndata, QI_data_mean, fitparm)
-            # logging.info("fit returned with fitok = {}...".format(fitok))
+        # logging.info("Trying fit...")
+        fitok, fitparm, retssq = fit(ndata, QI_data_mean, fitparm)
+        # logging.info("fit returned with fitok = {}...".format(fitok))
         # print('After: ', fitparm)
 
         buffer_df = pd.DataFrame()
@@ -591,7 +570,7 @@ class DeepFitFramework():
         return buffer_df
 
 
-    def fit(self, label, n=None, init_a=1.6, init_m=6.0, ndata=10, use_c_core=False, fit_label=None, init_psi=False, verbose=True):
+    def fit(self, label, n=None, init_a=1.6, init_m=6.0, ndata=10, fit_label=None, init_psi=False, verbose=True):
         """Performs fit on the raw data specified by `label`, generating a corresponding
         DeepFitObject.
         """
@@ -627,7 +606,7 @@ class DeepFitFramework():
 
 
         if init_psi:
-            psi = self.psi_init(label, init_psi, init_a, init_m, R, ndata, use_c_core, fit_label, verbose)
+            psi = self.psi_init(label, init_psi, init_a, init_m, R, ndata, fit_label, verbose)
         else:
             psi = 0.0
 
@@ -637,12 +616,12 @@ class DeepFitFramework():
         if verbose:
             logging.info('Processing...')
             for b in tqdm(range(nbuf)):
-                newfit = self._fit_(label, b, R, ndata, use_c_core, fit_label);
+                newfit = self._fit_(label, b, R, ndata, fit_label);
                 self.fits_df[fit_label] = pd.concat((self.fits_df[fit_label], newfit), ignore_index=True)
             logging.info('Done!!!')
         else:
             for b in range(nbuf):
-                newfit = self._fit_(label, b, R, ndata, use_c_core, fit_label);
+                newfit = self._fit_(label, b, R, ndata, fit_label);
                 self.fits_df[fit_label] = pd.concat((self.fits_df[fit_label], newfit), ignore_index=True)
 
         self.fits_df[fit_label] = self.fits_df[fit_label][self.fits_df[fit_label]['b'] > -1]
@@ -672,7 +651,7 @@ class DeepFitFramework():
         return fit
 
 
-    def psi_init(self, label, method, init_a, init_m, R, ndata, use_c_core, fit_label, verbose):
+    def psi_init(self, label, method, init_a, init_m, R, ndata, fit_label, verbose):
 
         if verbose:
             logging.info("Initializing psi parameter using {} method".format(method))
@@ -681,7 +660,7 @@ class DeepFitFramework():
             init_psi = 0.0
             best_ssq = 9e99
             for psi in np.linspace(0, 2*np.pi, 20):
-                new_ssq = self.try_psi(psi, label, init_a, init_m, R, ndata, use_c_core, fit_label)
+                new_ssq = self.try_psi(psi, label, init_a, init_m, R, ndata, fit_label)
                 if new_ssq < best_ssq:
                     best_ssq = new_ssq
                     init_psi = psi
@@ -691,12 +670,12 @@ class DeepFitFramework():
             init_psi = 0.0
             best_ssq = 9e99
             for psi in np.linspace(0, 2*np.pi, 20):
-                new_ssq = self.try_psi(psi, label, init_a, init_m, R, ndata, use_c_core, fit_label)
+                new_ssq = self.try_psi(psi, label, init_a, init_m, R, ndata, fit_label)
                 if new_ssq < best_ssq:
                     best_ssq = new_ssq
                     init_psi = psi
             logging.info("Minimizer start with initial guess psi = {}".format(init_psi))
-            res = minimize(self.try_psi, init_psi, args=(label, init_a, init_m, R, ndata, use_c_core, fit_label),\
+            res = minimize(self.try_psi, init_psi, args=(label, init_a, init_m, R, ndata, fit_label),\
             method="Nelder-Mead", bounds=[(0.0,2*np.pi)], options={"xatol": 1e-9, "fatol": 1e-14, "disp": True})
             init_psi = res.x[0]
 
@@ -706,15 +685,15 @@ class DeepFitFramework():
         return init_psi
 
 
-    def try_psi(self, psi, label, init_a, init_m, R, ndata, use_c_core, fit_label):
+    def try_psi(self, psi, label, init_a, init_m, R, ndata, fit_label):
 
         self.fits_df[label] = pd.DataFrame(\
             [{'amp': init_a, 'm': init_m, 'phi': 0, 'psi': psi, 'dc': 1, 'ssq': 0, 'fitok': 0, 'b':-1}])
-        newfit = self._fit_(label, 0, R, ndata, use_c_core, fit_label);
+        newfit = self._fit_(label, 0, R, ndata, fit_label);
         return newfit['ssq'][0]
 
 
-    def pfit(self, n, labels=None, init_a=1.6, init_m=6.0, ndata=10, use_c_core=False):
+    def pfit(self, n, labels=None, init_a=1.6, init_m=6.0, ndata=10):
         """Performs fit on the raw data specified by `labels`, generating the corresponding
         DeepFitObject's, parallelizing the computation over the number of raw data channels
         selected.
@@ -744,7 +723,7 @@ class DeepFitFramework():
 
         with Pool(threads) as p:
             fits = list(tqdm(p.imap(partial(\
-                self.fit, n=n, init_a=init_a, init_m=init_m, ndata=ndata, use_c_core=use_c_core, fit_label=None, verbose=False), labels), total=len(labels)))
+                self.fit, n=n, init_a=init_a, init_m=init_m, ndata=ndata, fit_label=None, verbose=False), labels), total=len(labels)))
         
         for fit in fits:
             self.fits[fit.label] = fit
@@ -768,22 +747,21 @@ class DeepFitFramework():
         for the existing fit data under the specified `labels`, or for all
         of the existing fit data.
         """
-        import lpsd
-        lpsd.use_c_core = True
+        from spectools.lpsd import lpsd
 
         if labels is not None:
             for fit in labels:
                 try:
-                    self.fits[fit].f, _, self.fits[fit].Sxx, _, _, _ = lpsd.lpsd(self.fits[fit].phi, \
+                    self.fits[fit].f, _, self.fits[fit].Sxx, _, _, _ = lpsd(self.fits[fit].phi, \
                         self.fits[fit].fs, self.fits[fit].olap, self.fits[fit].bmin, self.fits[fit].Lmin, \
-                        self.fits[fit].Jdes, self.fits[fit].Kdes, self.fits[fit].order, self.fits[fit].win, self.fits[fit].psll)
+                        self.fits[fit].Jdes, self.fits[fit].Kdes, self.fits[fit].order, self.fits[fit].win, self.fits[fit].psll, return_type='legacy')
                 except:
                     logging.warning('Specified label is invalid!')
         else:
             for fit in self.fits:
-                self.fits[fit].f, _, self.fits[fit].Sxx, _, _, _ = lpsd.lpsd(self.fits[fit].phi, \
+                self.fits[fit].f, _, self.fits[fit].Sxx, _, _, _ = lpsd(self.fits[fit].phi, \
                     self.fits[fit].fs, self.fits[fit].olap, self.fits[fit].bmin, self.fits[fit].Lmin, \
-                    self.fits[fit].Jdes, self.fits[fit].Kdes, self.fits[fit].order, self.fits[fit].win, self.fits[fit].psll)
+                    self.fits[fit].Jdes, self.fits[fit].Kdes, self.fits[fit].order, self.fits[fit].win, self.fits[fit].psll, return_type='legacy')
 
 
     def plot_lpsd(self, labels=None, nm=True, pm=True):
