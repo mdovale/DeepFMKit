@@ -539,10 +539,12 @@ class DeepFitFramework():
 
         buf = range(b*R,(b+1)*R)
 
-        for n in range(ndata):
-            Q_data, I_data = calculate_quadratures(\
-                n, np.array(self.raws[label].data.loc[buf]), 2.*np.pi*self.raws[label].f_mod/self.raws[label].f_samp, R)
+        raw_buffer = np.array(self.raws[label].data.loc[buf]).flatten()
 
+        w0 = 2. * np.pi * self.raws[label].f_mod / self.raws[label].f_samp
+
+        for n in range(ndata):
+            Q_data, I_data = calculate_quadratures(n, raw_buffer, w0, R)
             QI_data_mean[n] = Q_data.mean()
             QI_data_mean[n+ndata] = I_data.mean()
             vec_sig = QI_data_mean[n] + 1j*QI_data_mean[n+ndata]
@@ -551,11 +553,33 @@ class DeepFitFramework():
             QI_data_mean[n] = amp * cos(phase)
             QI_data_mean[n+ndata] = amp * sin(phase)
             dc = float(self.raws[label].data.loc[buf].mean().iloc[0])
+        # ===================================================================
+        # START: Diagnostic Print Block
+        # ===================================================================
+        # print("\n" + "="*80)
+        # print(f"--- DIAGNOSTIC: Data for fit buffer b = {b} ---")
+        # print("Final I/Q data being passed to fitter:")
+        # print(QI_data_mean)
+        # if np.all(QI_data_mean == 0):
+        #     print("\n>>> CRITICAL: All I/Q values are zero! Checking inputs to quadratures...")
+        #     print(f"    Buffer size (R): {R}")
+        #     print(f"    Harmonic count (ndata): {ndata}")
+        #     print(f"    w0 (rad/sample): {w0}")
+        #     # Let's check the raw data that went in
+        #     raw_buffer = np.array(self.raws[label].data.loc[buf])
+        #     print(f"    Shape of raw_buffer: {raw_buffer.shape}")
+        #     print(f"    Mean of raw_buffer: {np.mean(raw_buffer)}")
+        #     print(f"    Std dev of raw_buffer: {np.std(raw_buffer)}")
+        # print("="*80 + "\n")
+        # ===================================================================
+        # END: Diagnostic Print Block
+        # ===================================================================
         # print('Before: ', fitparm)
         # logging.info("Trying fit...")
         fitok, fitparm, retssq = fit(ndata, QI_data_mean, fitparm)
         # logging.info("fit returned with fitok = {}...".format(fitok))
         # print('After: ', fitparm)
+
 
         buffer_df = pd.DataFrame()
         buffer_df['amp'] = [fitparm[0]]

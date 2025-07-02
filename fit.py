@@ -31,24 +31,55 @@ DBL_EPSILON = 2.2204460492503131e-16
 
 @profile
 def calculate_quadratures(n, data, w0, bufferSize):
-    Q_data = np.zeros(bufferSize)
-    I_data = np.zeros(bufferSize)
-    t_step = 0
-    for j in range(bufferSize):
-        Q_data[j] = data[j]*cos((n+1)*w0*t_step)
-        I_data[j] = data[j]*sin((n+1)*w0*t_step)
-        t_step += 1
+    """Calculate the in-phase (Q) and quadrature (I) components of a signal.
 
-    # t_step = 0
-    # Q_data = np.zeros(bufferSize)
-    # I_data = np.zeros(bufferSize)
-    # for j in range(bufferSize):
-    #   np.multiply(data[j], cos((n+1)*w0*t_step), out=Q_data[j])
-    #   np.multiply(data[j], sin((n+1)*w0*t_step), out=I_data[j])
-        # t_step += 1
+    This function performs digital lock-in amplification by demodulating the
+    input `data` with reference sine and cosine waves at a specific harmonic
+    of the fundamental frequency.
 
-    # Q_data = np.multiply(np.array(data),np.cos((n+1)*w0*np.arange(0,bufferSize,1)))
-    # I_data = np.multiply(np.array(data),np.sin((n+1)*w0*np.arange(0,bufferSize,1)))
+    Parameters
+    ----------
+    n : int
+        The zero-indexed harmonic number to demodulate. The demodulation
+        frequency will be `(n + 1) * f_mod`.
+    data : array_like
+        A 1-D array of the raw time-series signal to be demodulated.
+    w0 : float
+        The fundamental angular frequency of the modulation in units of
+        radians per sample (i.e., `2 * pi * f_mod / f_samp`).
+    bufferSize : int
+        The number of samples in the `data` array.
+
+    Returns
+    -------
+    Q_data : numpy.ndarray
+        A 1-D array of the same size as `data`, containing the in-phase (cosine)
+        component of the demodulated signal at each time step.
+    I_data : numpy.ndarray
+        A 1-D array of the same size as `data`, containing the quadrature (sine)
+        component of the demodulated signal at each time step.
+
+    Notes
+    -----
+    This implementation is vectorized using NumPy for high performance,
+    avoiding explicit Python loops. The mean of the returned Q and I arrays
+    gives the final I/Q value for the specified harmonic over the buffer.
+    """
+    # Ensure data is a NumPy array for efficient operations
+    data = np.asarray(data)
+
+    # Generate the time steps for the entire buffer at once
+    # t_steps is an array [0, 1, 2, ..., bufferSize-1]
+    t_steps = np.arange(bufferSize)
+
+    # Calculate the argument for the sine and cosine functions for all time steps
+    # This is also a vectorized operation.
+    demod_angle = (n + 1) * w0 * t_steps
+
+    # Perform element-wise multiplication on the entire arrays.
+    # This is a single, highly optimized operation in NumPy.
+    Q_data = data * np.cos(demod_angle)
+    I_data = data * np.sin(demod_angle)
 
     return Q_data, I_data
 
@@ -57,7 +88,13 @@ def mean_filter(signal):
 	return signal.mean()
 
 @profile
+# In fit.py
+
 def coeffs(ndata, data, param):
+    """
+    Calculates the sum of squares residual, the Jacobian matrix (J^T*J),
+    and the gradient vector (J^T*r) for the NLS fit.
+    """
     a = param[0]
     m = param[1]
     phi = param[2]
@@ -74,6 +111,36 @@ def coeffs(ndata, data, param):
 
     ssq = 0.0
 
+    # Pre-calculate all model values for printing
+    model_q = np.zeros(ndata)
+    model_i = np.zeros(ndata)
+    
+    for i in range(ndata):
+        j = i + 1
+        model_q[i] = a * sincos[j % 4] * jv(j, m) * cos(j * psi)
+        
+    for i in range(ndata, 2*ndata):
+        j = (i - ndata) + 1
+        model_i[j-1] = a * sincos[j % 4] * jv(j, m) * (-1) * sin(j * psi)
+    
+    # ===================================================================
+    # START: Diagnostic Print Block
+    # ===================================================================
+    # print("\n" + "="*80)
+    # print("--- DIAGNOSTIC: Entering coeffs function ---")
+    # print(f"Parameters (a, m, phi, psi): {a:.4f}, {m:.4f}, {phi:.4f}, {psi:.4f}")
+    # print("\nComparing Measured Data vs. Calculated Model:")
+    # print("--------------------------------------------------------------------")
+    # print(" n |  Measured Q  |   Model Q    |  Measured I  |   Model I")
+    # print("--------------------------------------------------------------------")
+    # for i in range(ndata):
+    #     # data[i] is Q_n, data[i+ndata] is I_n
+    #     print(f"{i+1:2d} | {data[i]:+1.8f} | {model_q[i]:+1.8f} | {data[i+ndata]:+1.8f} | {model_i[i]:+1.8f}")
+    # print("--------------------------------------------------------------------")
+    # ===================================================================
+    # END: Diagnostic Print Block
+    # ===================================================================
+
     for i in range(ndata):
         j = i+1
 
@@ -82,7 +149,8 @@ def coeffs(ndata, data, param):
         d2 = a * sincos[(j + 1) % 4] * jv(j, m) * cos(j * psi)
         d3 = - a * sincos[j % 4] * jv(j, m) * j * sin(j * psi)
 
-        ydiff = data[i] - a * sincos[j % 4] * jv(j, m) * cos(j * psi)
+        # Use the pre-calculated model value for Q_n
+        ydiff = data[i] - model_q[i]
 
         b_g_mat[0]  += ydiff * d0
         b_g_mat[1]  += ydiff * d1
@@ -102,14 +170,17 @@ def coeffs(ndata, data, param):
         ssq += ydiff**2
 
     for i in range(ndata, 2*ndata):
-        j = (i - ndata) + 1
+        # Index for model_i is (0 to ndata-1)
+        model_idx = i - ndata
+        j = model_idx + 1
 
         d0 = - sincos[j % 4] * jv(j, m) * sin(j * psi)
         d1 = - a * sincos[j % 4] * 0.5 * (jv(j-1, m) - jv(j+1, m)) * sin(j * psi)
         d2 = - a * sincos[(j + 1) % 4] * jv(j, m) * sin(j * psi)
         d3 = - a * sincos[j % 4] * jv(j, m) * j * cos(j * psi)
 
-        ydiff = data[i] - a * sincos[j % 4] * jv(j, m) * (-1) * sin(j * psi)
+        # Use the pre-calculated model value for I_n
+        ydiff = data[i] - model_i[model_idx]
 
         b_g_mat[0]  += ydiff * d0
         b_g_mat[1]  += ydiff * d1
@@ -135,8 +206,18 @@ def coeffs(ndata, data, param):
     a_g_mat[13] = a_g_mat[7]
     a_g_mat[14] = a_g_mat[11]
 
-    return ssq, a_g_mat, b_g_mat
+    # ===================================================================
+    # START: Diagnostic Print Block 2
+    # ===================================================================
+    # print(f"\nCalculated SSQ = {ssq:e}")
+    # print("="*80)
+    # import sys
+    # sys.exit("Exiting for debug after first call to coeffs.")
+    # ===================================================================
+    # END: Diagnostic Print Block 2
+    # ===================================================================
 
+    return ssq, a_g_mat, b_g_mat
 
 @profile
 def gaussj(a, n, b):
@@ -192,53 +273,6 @@ def gaussj(a, n, b):
 
     return a, b
 
-
-@profile
-def linsolve(a, n, b):
-    res = np.zeros(NPARMS)
-
-    for i in range(n):
-        rms2 = 0
-        for j in range(n):
-            rms2 += a[i*n+j]**2
-        fac = 1./sqrt(rms2/n)
-        for j in range(n):
-            a[i*n+j] *= fac
-        b[i] *= fac
-
-    ainv = a.copy()
-    bsol = b.copy()
-
-    ainv, bsol = gaussj(ainv, n, bsol)
-
-    rms2 = 0
-
-    for i in range(n):
-        res[i] = -b[i]
-        for j in range(n):
-            res[i] += a[i*n+j] * bsol[j]
-        rms2 += res[i]**2
-
-    ainv = a.copy()
-
-    ainv, res = gaussj(ainv, n, res)
-
-    for i in range(n):
-        bsol[i] -= res[i]
-
-    rms2 = 0
-
-    for i in range(n):
-        res[i] = -b[i]
-        for j in range(n):
-            res[i] += a[i*n+j] * bsol[j]
-        rms2 += res[i]**2
-
-    b = bsol.copy();
-
-    return a, b
-
-
 @profile
 def ssqf(ndata, data, param):
     bes = np.zeros(MAXDATA + 3)
@@ -270,225 +304,97 @@ def ssqf(ndata, data, param):
 
 @profile
 def msolve(lam, a_g_mat, b_g_mat):
-    a2 = a_g_mat.copy()
+    """Solves the Levenberg-Marquardt matrix equation.
 
-    a2[0]  *= (1+lam)
-    a2[5]  *= (1+lam)
-    a2[10] *= (1+lam)
-    a2[15] *= (1+lam)
+    Calculates the parameter update step dp by solving the equation:
+    (J^T*J + lam * diag(J^T*J)) * dp = J^T*r
 
-    dp = b_g_mat.copy()
+    Parameters
+    ----------
+    lam : float
+        The Levenberg-Marquardt damping parameter.
+    a_g_mat : numpy.ndarray
+        A flattened 16-element array representing the 4x4 (J^T*J) matrix.
+    b_g_mat : numpy.ndarray
+        A 4-element array representing the gradient vector (J^T*r).
 
-    a2, dp = linsolve(a2, 4, dp)
+    Returns
+    -------
+    numpy.ndarray
+        A 4-element array `dp` containing the calculated parameter update step.
+        Returns a zero vector if the matrix is singular.
+    """
+    # Reshape the flattened array into a 4x4 matrix
+    JTJ = a_g_mat.reshape(4, 4)
 
+    # Create the damped matrix for the L-M algorithm
+    # This uses the variant with lambda on the diagonal, which is more stable.
+    A_lm = JTJ + lam * np.diag(np.diag(JTJ))
+
+    try:
+        # Use NumPy's highly optimized and stable linear algebra solver
+        dp = np.linalg.solve(A_lm, b_g_mat)
+    except np.linalg.LinAlgError:
+        # If the matrix is singular (e.g., m=0), the problem is ill-defined.
+        # The best thing to do is propose no change to the parameters.
+        # The L-M algorithm will then increase lambda and try again.
+        dp = np.zeros(NPARMS)
+        
     return dp
 
 
 @profile
-def brentfunc(x, ndata, data, p, a_g_mat, b_g_mat):
-    px = p + msolve(exp(x), a_g_mat, b_g_mat)
-    sqtry = ssqf(ndata, data, px)
-
-    return sqtry, px
-
-
-@profile
-def brentfunc2(x, ndata, data, p, a_g_mat, b_g_mat):
-    px = p + msolve(exp(x), a_g_mat, b_g_mat)
-    sqtry = ssqf(ndata, data, px)
-
-    return sqtry
-
-
-@profile
-@with_goto
-def LISOfmin(ax, bx, tol, ndata, data, parm, a_g_mat, b_g_mat):
-    from numpy import sqrt
-    c = 0.381966011250105
-    d = 0
-    eps = DBL_EPSILON
-    tol1 = eps + 1.0
-    eps = sqrt(eps)
-    a = ax
-    b = bx
-    v = a + c * (b - a)
-    w = v
-    x = v
-    e = 0.0
-    fx, np = brentfunc(x, ndata, data, parm, a_g_mat, b_g_mat)
-    fv = fx
-    fw = fx
-    tol3 = tol / 3.
-
-
-    label .L20
-    xm = (a + b) * .5
-    tol1 = eps * abs(x) + tol3
-    t2 = tol1 * 2.0
-    if (abs(x - xm) <= t2 - (b - a) * .5):
-        goto .L190
-    p, q, r = 0.0, 0.0, 0.0
-    if (abs(e) <= tol1):
-        goto .L50
-    r = (x - w) * (fx - fv)
-    q = (x - v) * (fx - fw)
-    p = (x - v) * q - (x - w) * r
-    q = (q - r) * 2.0
-    if (q <= 0.0):
-        goto .L30
-    p = -p
-    goto .L40
-
-
-    label .L30
-    q = -q
-
-
-    label .L40
-    r = e
-    e = d
-
-
-    label .L50
-    if ((abs(p) >= abs(q * .5 * r)) or (p <= q *(a - x)) or (p >= q * (b - x))):
-        goto .L60
-    d = p / q
-    u = x + d
-    if ((u - a >= t2) and (b - u >= t2)):
-        goto .L90
-    d = tol1
-    if (x >= xm):
-        d = -d
-    goto .L90
-
-
-    label .L60
-    if (x >= xm):
-        goto .L70
-    e = b - x
-    goto .L80
-
-
-    label .L70
-    e = a - x
-
-
-    label .L80
-    d = c * e
-
-
-    label .L90
-    if (abs(d) < tol1):
-        goto .L100
-    u = x + d
-    goto .L120
-
-
-    label .L100
-    if (d <= 0.0):
-        goto .L110
-    u = x + tol1
-    goto .L120
-
-
-    label .L110
-    u = x - tol1
-
-
-    label .L120
-    fu, np = brentfunc(u, ndata, data, parm, a_g_mat, b_g_mat)
-    if (fx > fu):
-        goto .L140
-    if (u >= x):
-        goto .L130
-    a = u
-    goto .L140
-
-
-    label .L130
-    b = u
-
-
-    label .L140
-    if (fu > fx):
-        goto .L170
-    if (u >= x):
-        goto .L150
-    b = x
-    goto .L160
-
-
-    label .L150
-    a = x
-
-
-    label .L160
-    v = w
-    fv = fw
-    w = x
-    fw = fx
-    x = u
-    fx = fu
-    goto .L20
-
-
-    label .L170
-    if ((fu > fw) and (w != x)):
-        goto .L180
-    v = w
-    fv = fw
-    w = u
-    fw = fu
-
-
-    label .L180
-    if ((fu > fv) and (v != x) and (v != w)):
-        goto .L20
-    v = u
-    fv = fu
-    goto .L20
-
-
-    label .L190
-    return x
-
-
-@profile
 def marq4(ndata, data, parm):
-
+    """
+    Performs one robust step of the Levenberg-Marquardt algorithm.
+    It tries increasing values of the damping parameter 'lam' until
+    it finds a step that improves the sum of squares.
+    """
+    
+    # 1. Calculate the ssq and Jacobian at the current point
     ssq0, a_g_mat, b_g_mat = coeffs(ndata, data, parm)
-    lmin = LISOfmin (log(LAMBDA_MIN), log(LAMBDA_MAX), BRENT_TOL, ndata, data, parm, a_g_mat, b_g_mat)
-    ssq1, newparm = brentfunc(lmin, ndata, data, parm, a_g_mat, b_g_mat)
+    
+    # 2. Start with a small damping factor (more like Gauss-Newton)
+    #    Using a list of explicit values is simple and robust.
+    #    You can also generate this list logarithmically.
+    lambda_candidates = [0.0, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1, 10]
+    
+    best_ssq = ssq0
+    best_parm = parm.copy()
 
-    if (ssq1 < ssq0):
-        parm = newparm.copy()
-        ssq = ssq1
-    else:
-        ssq = ssq0
+    for lam in lambda_candidates:
+        # Calculate the proposed parameter step for this lambda
+        dp = msolve(lam, a_g_mat, b_g_mat)
+        
+        # If the step is negligible, no point in continuing
+        if np.linalg.norm(dp) < 1e-15:
+            continue
 
-    return parm, ssq, ssq0 - ssq1
-
-@profile
-def marq4_v2(ndata, data, parm):
-
-    ssq0, a_g_mat, b_g_mat = coeffs(ndata, data, parm)
-    lmin = brent(brentfunc2, args=(ndata, data, parm, a_g_mat, b_g_mat), tol=BRENT_TOL)
-    ssq1, newparm = brentfunc(lmin, ndata, data, parm, a_g_mat, b_g_mat)
-
-    if (ssq1 < ssq0):
-        parm = newparm.copy()
-        ssq = ssq1
-    else:
-        ssq = ssq0
-
-    return parm, ssq, ssq0 - ssq1
+        # Calculate the new parameters and the resulting ssq
+        p_try = parm + dp
+        ssq_try = ssqf(ndata, data, p_try)
+        
+        # If this lambda gives a better result, save it and we are done for this iteration.
+        # The LMA doesn't require finding the *absolute best* lambda, just one
+        # that makes progress. This is much faster and more robust than brent.
+        if ssq_try < best_ssq:
+            best_ssq = ssq_try
+            best_parm = p_try
+            # We found an improvement, so we can stop searching for a better lambda
+            break 
+            
+    # If no lambda improved the fit, best_ssq will still be ssq0.
+    # The 'improve' value will be 0, and the main loop will terminate.
+    improve = ssq0 - best_ssq
+    
+    return best_parm, best_ssq, improve
 
 @profile
 def fit(ndata, data, parm):
     nsteps = 0
 
     while (1):
-        parm, fitssq, improve = marq4_v2(ndata, data, parm)
+        parm, fitssq, improve = marq4(ndata, data, parm)
         nsteps += 1
 
         if (improve < MAR_END):
@@ -590,7 +496,7 @@ def fit(ndata, data, parm):
             parm = testp.copy()
 
     while (1):
-        parm, fitssq, improve = marq4_v2(ndata, data, parm)
+        parm, fitssq, improve = marq4(ndata, data, parm)
         if (improve < MAR_END):
             break
 
