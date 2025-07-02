@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import matplotlib.dates as mdates
 
+
 default_rc = {
     'figure.dpi': 150,
     'font.size': 8,
@@ -20,8 +21,26 @@ default_rc = {
         '#000000', '#DC143C', '#00BFFF', '#FFD700', '#32CD32',
         '#FF69B4', '#FF4500', '#1E90FF', '#8A2BE2', '#FFA07A', '#8B0000'
     ]),
-    }
+}
 plt.rcParams.update(default_rc)
+
+legend_params = {
+    'loc': 'best',
+    'fontsize': 8,
+    'frameon': True,
+}
+
+def apply_legend(ax):
+    legend = ax.legend(**legend_params)
+    frame = legend.get_frame()
+    frame.set_alpha(1.0)          # No transparency
+    frame.set_edgecolor('black')  # Black border
+    frame.set_linewidth(0.7)
+    try:
+        frame.set_boxstyle('Square')  # No rounded corners
+    except AttributeError:
+        pass  # Safe fallback for older matplotlib
+    return legend
 
 def figsize(scale):
     fig_width_pt = 390  # Get this from LaTeX using \the\textwidth
@@ -32,45 +51,32 @@ def figsize(scale):
     fig_size = [fig_width, fig_height]
     return fig_size
 
-
-def lin_plot(x, y, ax, title, xlabel, ylabel, label):
+def lin_plot(x, y, ax, title, xlabel, ylabel, label, *args, **kwargs):
     if x is not None:
-        ax.plot(x, y, label=label)
+        ax.plot(x, y, label=label, *args, **kwargs)
     else:
-        ax.plot(y, label=label)
+        ax.plot(y, label=label, *args, **kwargs)
     ax.set_title(title, fontsize=11)
     ax.xaxis.set_tick_params(labelsize=11)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    ax.legend(loc="upper right")
-    ax.grid(which='both', color='grey', linestyle='--', linewidth=0.3)
     plt.tight_layout()
 
-
-def log_plot(x, y, ax, title, xlabel, ylabel, label):
-    #plt.ioff()
-    ax.loglog(x, y, label=label)
+def log_plot(x, y, ax, title, xlabel, ylabel, label, *args, **kwargs):
+    ax.loglog(x, y, label=label, *args, **kwargs)
     ax.set_title(title, fontsize=11)
     ax.xaxis.set_tick_params(labelsize=11)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    ax.legend(loc="upper right")
-    ax.grid(which='both', color='grey', linestyle='--', linewidth=0.3)
     plt.tight_layout()
 
-
-def stem_plot(x, y, ax, title, xlabel, ylabel, label):
-    #ax.axhline(x[0], x[-1], 0, color='r')
-    ax.vlines(x, 0, y, color='b', label=label)
+def stem_plot(x, y, ax, title, xlabel, ylabel, label, *args, **kwargs):
+    ax.vlines(x, 0, y, color='b', label=label, *args, **kwargs)
     ax.set_ylim([1.05 * y.min(), 1.05 * y.max()])
     ax.set_title(title, fontsize=11)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    plt.legend()
-    ax.legend(loc="upper right")
-    ax.grid(which='both', color='grey', linestyle='--', linewidth=0.3)
     plt.tight_layout()
-
 
 def autoscale_y(ax, margin=0.1):
     """
@@ -98,7 +104,6 @@ def autoscale_y(ax, margin=0.1):
 
     ax.set_ylim(bot, top)
 
-
 def dfm_axes():
     fig1, (ax1, ax2, ax3, ax4, ax5, ax6) = plt.subplots(6,
                                                    figsize=figsize(2),
@@ -118,19 +123,16 @@ def dfm_axes():
 
     return fig1, (ax1, ax2, ax3, ax4, ax5, ax6)
 
-
 def phase_req(x, level, corner):
     y = np.zeros(len(x))
     for k, f in enumerate(x):
         y[k] = level * np.sqrt(1 + (corner / f)**4)
     return y
 
-
 def displacement_req(x, level, corner):
     wl = 1064e-9
     phase_level = (2 * np.pi / wl) * level
     return phase_req(x, phase_level, corner)
-
 
 def time_plot(t_list, y_list, label_list=None, xrange=None, \
     title=None, y_label=None, figsize=(20,5),\
@@ -200,7 +202,6 @@ def time_plot(t_list, y_list, label_list=None, xrange=None, \
 
     fig.tight_layout()
     return ax
-
 
 def time_histogram(df, time_key, y_key, time_floor='h', nbins = None,\
 start=None, end=None, format_str = '%d/%m/%Y-%H:%M', figsize=(20,5)):
@@ -287,7 +288,6 @@ start=None, end=None, format_str = '%d/%m/%Y-%H:%M', figsize=(20,5)):
 
     return fig, ax
 
-
 def asd_plot(f_list, asd_list, label_list=None, title=None, unit=None, psd=False):
     """
     Plot spectral densities on logarithmic axes
@@ -313,6 +313,8 @@ def asd_plot(f_list, asd_list, label_list=None, title=None, unit=None, psd=False
             log_plot(f_list[i], asd, ax, title, xlabel, ylabel, label_list[i])
     else:
         for i, asd in enumerate(asd_list):
-            log_plot(f_list[i], np.sqrt(asd), ax, title, xlabel, ylabel, label_list[i])        
+            log_plot(f_list[i], np.sqrt(asd), ax, title, xlabel, ylabel, label_list[i])       
 
-    return fig, ax
+    apply_legend(ax)
+
+    return ax
