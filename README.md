@@ -6,7 +6,7 @@ A high-performance Python framework for simulating, processing, and analyzing da
 
 Deep Frequency Modulation Interferometry (DFMI) is a laser-based metrology technique used for high-precision displacement sensing and absolute distance measurement. This toolkit, **DeepFMKit**, provides a complete software environment for researchers and engineers working with DFMI.
 
-It is designed to handle the entire experimental workflow, from simulating complex interferometric signals with realistic noise sources to performing robust, high-speed non-linear least squares (NLS) fits to extract physical parameters.
+It is designed to handle the entire experimental workflow, from simulating complex interferometric signals with realistic noise sources to performing robust high-speed DFMI-readout. For this purpose, it features two mathematical engines: non-linear least squares (NLS) fits acting on the frequency-domain, and an Extended Kalman Filter acting on the time-domain.
 
 ### Key Features
 
@@ -49,14 +49,15 @@ dff = DeepFitFramework()
 # Create a `DeepSimObject` describing an interferometer
 label = "dynamic"
 dff.new_sim(label)
-dff.sims[label].m = 6.0
-dff.sims[label].f_mod = 1000
-dff.sims[label].f_samp = int(200e3)
-dff.sims[label].f_n = 1e6
-dff.sims[label].arml_mod_f = 1.0
-dff.sims[label].arml_mod_amp = 1e-9
-dff.sims[label].arml_mod_n = 1e-12
-dff.sims[label].fit_n = 10
+dff.sims[label].m = 6.0 # Effective modulation index
+dff.sims[label].f_mod = 1000 # Modulation frequency
+dff.sims[label].f_samp = int(200e3) # Sampling frequency in Hz
+dff.sims[label].f_n = 1e6 # Frequency noise ASD
+dff.sims[label].arml_mod_f = 1.0 # Frequency of the dynamic armlength
+dff.sims[label].arml_mod_amp = 1e-9 # Motion of the dynamic armlength
+dff.sims[label].arml_mod_n = 1e-12 # Noise on the dynamic armlength
+dff.sims[label].fit_n = 10 # Number of harmonics to fit
+dff.sims[label].amp_n = 1e-2 # Amplitude noise
 
 # Simulate DFM interferometer with test mass motion and a reference channel
 dff.simulate(label, n_seconds=10, simulate="dynamic", ref_channel=True)

@@ -269,7 +269,6 @@ class DeepFitFramework():
 
     def _generate_ideal_signal(self, sim_config, time_axis, is_dynamic, is_ref_channel=False):
         """Generates a perfect, noiseless DFMI signal for SNR-based simulation."""
-        # This function is the pure physics engine from the previous proposal.
         A = sim_config.amp
         C = sim_config.visibility
         omega_mod = 2 * np.pi * sim_config.f_mod
@@ -341,31 +340,86 @@ class DeepFitFramework():
         logging.info(f"Simple simulation finished in {sim_config.simtime:.3f} s.")
 
     def _generate_noise_arrays(self, sim_config, time_axis, trial_num=0):
-        # ... your existing, optimized noise generation code ...
+        """
+        Generates time-series noise arrays for different physical sources.
+
+        This function creates noise based on the Amplitude Spectral Density (ASD)
+        and noise color (`alpha`) defined in the simulation configuration.
+
+        It implements special, optimized handling for white noise sources
+        ('amplitude', 'df'), using `numpy.random.normal`. The required standard
+        deviation (`sigma`) for the time series is calculated from the target ASD
+        using the relation: `sigma = ASD * sqrt(sampling_rate / 2)`.
+
+        For other, colored noise sources (like 1/f laser frequency drift), it
+        continues to use the `pyplnoise` library to generate the appropriate
+        time series.
+
+        Parameters
+        ----------
+        sim_config : DFMIObject
+            The simulation configuration object containing noise parameters like
+            `f_n`, `amp_n`, `df_n`, etc.
+        time_axis : numpy.ndarray
+            The time vector for the simulation. Its length determines the number
+            of samples to generate.
+        trial_num : int, optional
+            A number used to seed the random noise generators, ensuring
+            reproducible but different noise for each trial. Defaults to 0.
+
+        Returns
+        -------
+        dict
+            A dictionary where keys are noise source names (e.g., 'laser_frequency',
+            'amplitude') and values are the corresponding numpy arrays of the
+            generated noise time series.
+        """
         num_samples = len(time_axis)
         fs = sim_config.f_samp
         noise_params = {
-            'laser_frequency': {'asd': sim_config.f_n, 'alpha': 1.0},
-            'amplitude': {'asd': sim_config.amp_n, 'alpha': 0.01},
-            'df': {'asd': sim_config.df_n, 'alpha': 0.01},
-            'armlength': {'asd': sim_config.arml_mod_n, 'alpha': 1.0}
+            'laser_frequency': {'asd': sim_config.f_n, 'alpha': 2.0},
+            'amplitude': {'asd': sim_config.amp_n, 'alpha': 0.0}, # alpha=0 for white noise
+            'df': {'asd': sim_config.df_n, 'alpha': 0.0}, # alpha=0 for white noise
+            'armlength': {'asd': sim_config.arml_mod_n, 'alpha': 2.0}
         }
         basis_noises = {}
-        seed_counter = 1 + trial_num * len(noise_params)
-        for name, params in noise_params.items():
-            alpha_val = params['alpha']
-            if alpha_val not in basis_noises and params['asd'] != 0:
-                generator = pyplnoise.AlphaNoise(fs, fs / num_samples, fs / 2, alpha=alpha_val, seed=seed_counter)
-                basis_noises[alpha_val] = generator.get_series(num_samples)
-                seed_counter += 1
         final_noise = {}
+        
+        # Use a single seed counter to ensure all generators are unique per trial
+        seed_counter = 1 + trial_num * len(noise_params)
+
+        # Create a single RandomState generator for all numpy-based noise
+        rng = np.random.RandomState(seed=seed_counter)
+        seed_counter += 1
+
         for name, params in noise_params.items():
             asd = params['asd']
+            if asd == 0.0:
+                final_noise[name] = 0.0
+                continue
+
+            if name in ['amplitude', 'df']:
+                # Calculate required standard deviation for the time series
+                # sigma = ASD * sqrt(sampling_rate / 2)
+                sigma = asd * np.sqrt(fs / 2.0)
+                final_noise[name] = rng.normal(scale=sigma, size=num_samples)
+                # Skip to the next noise source
+                continue
+
             alpha_val = params['alpha']
-            if asd != 0 and alpha_val in basis_noises:
+            # Generate basis noise if not already created for this color
+            if alpha_val not in basis_noises and params['asd'] != 0:
+                generator = pyplnoise.AlphaNoise(fs, fs / num_samples, fs / 2, 
+                                                alpha=alpha_val, seed=seed_counter)
+                basis_noises[alpha_val] = generator.get_series(num_samples)
+                seed_counter += 1
+            
+            # Scale the basis noise by the specified ASD
+            if alpha_val in basis_noises:
                 final_noise[name] = asd / np.sqrt(2) * basis_noises[alpha_val]
             else:
                 final_noise[name] = 0.0
+
         return final_noise
     
     def _run_asd_static_simulation(self, sim_config, time_axis, noise_arrays):
@@ -509,7 +563,7 @@ class DeepFitFramework():
         time_axis = np.arange(num_samples) / sim_config.f_samp
         sim_config.N = len(time_axis)
 
-        logging.info(f"Simulating '{label}' ({simulate}) with ASDs for {n_seconds:.2f}s...")
+        # logging.info(f"Simulating '{label}' ({simulate}) with ASDs for {n_seconds:.2f}s...")
         t0 = time.time()
         
         # --- 2. Generate Noise and Run Physics Engine ---
@@ -526,7 +580,7 @@ class DeepFitFramework():
              y_main = self._run_asd_static_simulation(sim_config, time_axis, noise)
 
         sim_config.simtime = time.time() - t0
-        logging.info(f"ASD-based simulation finished in {sim_config.simtime:.3f} s.")
+        # logging.info(f"ASD-based simulation finished in {sim_config.simtime:.3f} s.")
 
         # --- 3. Create and Populate the Main Channel's Raw Data Object ---
         raw_main = DeepRawObject(data=pd.DataFrame(y_main, columns=["ch0"]))
