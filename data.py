@@ -40,13 +40,11 @@ class DFMIObject():
                 amp_n = 0.0,
                 arml_mod_n = 0.0,
 
-                f_samp=200000,
-                N=200000,
+                df_2nd_harmonic_frac = 0.0,
+                df_2nd_harmonic_phase = 0.0,
 
-                Ta=0.5,
-                Ra=0.5,
-                Tb=0.5,
-                Rb=0.5
+                f_samp=200000,
+                N=200000
                 ):
 
         self.label = label                 # Label of the object
@@ -73,6 +71,9 @@ class DFMIObject():
 
         self.f_samp = int(f_samp)          # Readout sampling frequency
         self.N = int(N)                    # Number of samples
+
+        self.df_2nd_harmonic_frac = df_2nd_harmonic_frac   # Fractional amplitude of 2nd harmonic (e.g., 0.02 for 2%)
+        self.df_2nd_harmonic_phase = df_2nd_harmonic_phase # Phase of 2nd harmonic relative to fundamental
 
         self._m = 2*np.pi*self.df*(self.meas_arml-self.ref_arml)/sc.c
         self._fit_n = 20

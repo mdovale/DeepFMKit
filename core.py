@@ -369,18 +369,46 @@ class DeepFitFramework():
         return final_noise
     
     def _run_asd_static_simulation(self, sim_config, time_axis, noise_arrays):
-        # ... your existing _run_static_simulation code ...
-        A, C = sim_config.amp, sim_config.visibility
-        tau_r, tau_m = sim_config.ref_arml / sc.c, sim_config.meas_arml / sc.c
-        m_noisy = 2 * np.pi * (sim_config.df + noise_arrays['df']) * (tau_m - tau_r)
-        phitot = sim_config.phi + m_noisy * np.cos(2 * np.pi * sim_config.f_mod * time_axis + sim_config.psi)
+        """
+        Core physics engine for static simulation with detailed noise ASDs.
+
+        This version includes support for adding second-harmonic distortion to the
+        frequency modulation, controlled by parameters in the sim_config object.
+        """
+        # --- 1. Unpack parameters ---
+        A = sim_config.amp
+        C = sim_config.visibility
+        tau_r = sim_config.ref_arml / sc.c
+        tau_m = sim_config.meas_arml / sc.c
+        omega_mod = 2 * np.pi * sim_config.f_mod
+
+        # --- 2. Calculate noisy modulation depth ---
+        df_noisy = sim_config.df + noise_arrays['df']
+        m_noisy = 2 * np.pi * df_noisy * (tau_m - tau_r)
+
+        # --- 3. Calculate total phase with optional distortion ---
+        # Base phase modulation from the fundamental harmonic
+        phase_mod = m_noisy * np.cos(omega_mod * time_axis + sim_config.psi)
+
+        # Add second harmonic distortion if specified
+        if sim_config.df_2nd_harmonic_frac != 0:
+            # Amplitude of the 2nd harmonic phase modulation is m2 = m * ε / 2
+            m2_noisy = m_noisy * sim_config.df_2nd_harmonic_frac / 2.0
+            phase_mod += m2_noisy * np.cos(2 * omega_mod * time_axis + sim_config.psi + sim_config.df_2nd_harmonic_phase)
+
+        phitot = sim_config.phi + phase_mod
+        # Add laser frequency noise contribution
         phitot += 2 * np.pi * noise_arrays['laser_frequency'] * (tau_m - tau_r)
+
+        # --- 4. Calculate final signal ---
         return A + noise_arrays['amplitude'] + A * C * np.cos(phitot)
 
     def _run_asd_dynamic_simulation(self, sim_config, time_axis, noise_arrays, create_ref_channel):
         """
         Core physics engine for dynamic simulation with detailed noise ASDs.
-        Returns signal arrays for the main channel and optionally a reference channel.
+
+        This version includes support for adding second-harmonic distortion to the
+        frequency modulation, controlled by parameters in the sim_config object.
         """
         # --- 1. Pre-calculate common noisy terms ---
         omega_0_noisy = 2 * np.pi * (sc.c / sim_config.wavelength + noise_arrays['laser_frequency'])
@@ -394,40 +422,54 @@ class DeepFitFramework():
         tau_dl = (0.5 * sim_config.arml_mod_amp * np.sin(2 * np.pi * sim_config.arml_mod_f * time_axis + sim_config.arml_mod_psi)
                   + noise_arrays['armlength'] + sim_config.phi * sim_config.wavelength / (2 * np.pi)) / sc.c
         
+        # Calculate phase modulation from the fundamental harmonic
         sin_term_meas = np.sin(omega_mod * (time_axis - tau_m - tau_dl) + sim_config.psi)
         sin_term_ref = np.sin(omega_mod * (time_axis - tau_r) + sim_config.psi)
-        
-        phi_static = omega_0_noisy * (tau_m - tau_r + tau_dl)
         phi_mod = (df_noisy / sim_config.f_mod) * (sin_term_meas - sin_term_ref)
+
+        # Add second harmonic distortion if specified
+        if sim_config.df_2nd_harmonic_frac != 0:
+            eps = sim_config.df_2nd_harmonic_frac
+            theta_eps = sim_config.df_2nd_harmonic_phase
+            
+            # The phase modulation from the 2nd harmonic component
+            sin_term_meas_2nd = np.sin(2 * omega_mod * (time_axis - tau_m - tau_dl) + sim_config.psi + theta_eps)
+            sin_term_ref_2nd = np.sin(2 * omega_mod * (time_axis - tau_r) + sim_config.psi + theta_eps)
+            
+            # Note the extra factor of 2 in the denominator from the integration
+            phi_mod += (df_noisy * eps / (2 * sim_config.f_mod)) * (sin_term_meas_2nd - sin_term_ref_2nd)
+
+        phi_static = omega_0_noisy * (tau_m - tau_r + tau_dl)
         phitot_main = phi_static + phi_mod
         
         y_main = sim_config.amp + noise_arrays['amplitude'] + sim_config.amp * sim_config.visibility * np.cos(phitot_main)
         
         # --- 3. Calculate Reference Channel Signal (if requested) ---
-        y_ref = None # Default to None
+        y_ref = None 
         if create_ref_channel:
-            # REUSE common terms, only recalculate what's different
             ref_opd_factor = sim_config.refifo_opd_factor
             tau_r_ref = tau_r * ref_opd_factor
             tau_m_ref = tau_m * ref_opd_factor
             
-            # Recalculate only the delayed sine terms for the reference IFO.
-            # NOTE: The reference IFO is static (no tau_dl).
             sin_term_meas_ref = np.sin(omega_mod * (time_axis - tau_m_ref) + sim_config.psi)
             sin_term_ref_ref = np.sin(omega_mod * (time_axis - tau_r_ref) + sim_config.psi)
-
-            # The phase of the reference channel
-            phi_static_ref = omega_0_noisy * (tau_m_ref - tau_r_ref)
             phi_mod_ref = (df_noisy / sim_config.f_mod) * (sin_term_meas_ref - sin_term_ref_ref)
+
+            if sim_config.df_2nd_harmonic_frac != 0:
+                eps = sim_config.df_2nd_harmonic_frac
+                theta_eps = sim_config.df_2nd_harmonic_phase
+                sin_term_meas_ref_2nd = np.sin(2 * omega_mod * (time_axis - tau_m_ref) + sim_config.psi + theta_eps)
+                sin_term_ref_ref_2nd = np.sin(2 * omega_mod * (time_axis - tau_r_ref) + sim_config.psi + theta_eps)
+                phi_mod_ref += (df_noisy * eps / (2 * sim_config.f_mod)) * (sin_term_meas_ref_2nd - sin_term_ref_ref_2nd)
+
+            phi_static_ref = omega_0_noisy * (tau_m_ref - tau_r_ref)
             phitot_ref = phi_static_ref + phi_mod_ref
-            
-            # The final signal for the reference channel
             y_ref = sim_config.amp + noise_arrays['amplitude'] + sim_config.amp * sim_config.visibility * np.cos(phitot_ref)
 
-        # Ground-truth phase for analysis purposes
         phi_s_ground_truth = 2 * np.pi * (sc.c / sim_config.wavelength) * (tau_m - tau_r + tau_dl)
 
         return y_main, y_ref, phitot_main, phi_s_ground_truth
+    
     def _vectorized_downsample(self, signal, R):
         """
         Vectorized downsampling function using NumPy's reshape and mean.
