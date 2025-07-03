@@ -42,6 +42,7 @@ The following example demonstrates the primary workflow: creating a simulation, 
 
 ```python
 from DeepFMKit.core import DeepFitFramework
+import matplotlib.pyplot as plt
 
 dff = DeepFitFramework()
 
@@ -68,5 +69,6 @@ for i, key in enumerate(dff.sims):
     dff.fit(label=key, fit_label=f'ch{i}')
 
 # Plot results
-dff.plot()
+ax = dff.plot()
+plt.show()
 ```

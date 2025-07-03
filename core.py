@@ -323,13 +323,18 @@ class DeepFitFramework():
         logging.info(f"Simulating '{label}' for {n_seconds:.2f}s with SNR={snr_db} dB...")
         t0 = time.time()
         
-        # We always use the 'static' model for this simple simulation type
+        # Use the static model for simplicity, as this method is for statistical tests
         y_clean = self._generate_ideal_signal(sim_config, time_axis, is_dynamic=False)
         y_noisy = self._add_white_noise(y_clean, snr_db, trial_num)
         
+        # Create the raw object and correctly populate ALL its metadata
         raw_obj = DeepRawObject(data=pd.DataFrame(y_noisy, columns=["ch0"]))
-        raw_obj.label, raw_obj.f_samp, raw_obj.f_mod = label, sim_config.f_samp, sim_config.f_mod
+        raw_obj.label = label
+        raw_obj.f_samp = sim_config.f_samp
+        raw_obj.f_mod = sim_config.f_mod
+        raw_obj.t0 = 0 # Or another appropriate value
         raw_obj.sim = sim_config
+        
         self.raws[label] = raw_obj
         
         sim_config.simtime = time.time() - t0
@@ -363,7 +368,6 @@ class DeepFitFramework():
                 final_noise[name] = 0.0
         return final_noise
     
-    # _run_static_simulation renamed to _run_asd_static_simulation
     def _run_asd_static_simulation(self, sim_config, time_axis, noise_arrays):
         # ... your existing _run_static_simulation code ...
         A, C = sim_config.amp, sim_config.visibility
@@ -373,41 +377,163 @@ class DeepFitFramework():
         phitot += 2 * np.pi * noise_arrays['laser_frequency'] * (tau_m - tau_r)
         return A + noise_arrays['amplitude'] + A * C * np.cos(phitot)
 
-    # _run_dynamic_simulation renamed to _run_asd_dynamic_simulation
-    def _run_asd_dynamic_simulation(self, sim_config, time_axis, noise_arrays):
-        # ... your existing _run_dynamic_simulation code ...
-        omega_0_noisy = 2*np.pi*(sc.c/sim_config.wavelength + noise_arrays['laser_frequency'])
-        omega_mod = 2*np.pi*sim_config.f_mod
+    def _run_asd_dynamic_simulation(self, sim_config, time_axis, noise_arrays, create_ref_channel):
+        """
+        Core physics engine for dynamic simulation with detailed noise ASDs.
+        Returns signal arrays for the main channel and optionally a reference channel.
+        """
+        # --- 1. Pre-calculate common noisy terms ---
+        omega_0_noisy = 2 * np.pi * (sc.c / sim_config.wavelength + noise_arrays['laser_frequency'])
+        omega_mod = 2 * np.pi * sim_config.f_mod
         df_noisy = sim_config.df + noise_arrays['df']
-        tau_r, tau_m = sim_config.ref_arml/sc.c, sim_config.meas_arml/sc.c
-        tau_dl = (0.5*sim_config.arml_mod_amp*np.sin(2*np.pi*sim_config.arml_mod_f*time_axis + sim_config.arml_mod_psi)
-                  + noise_arrays['armlength'] + sim_config.phi * sim_config.wavelength / (2*np.pi)) / sc.c
-        sin_term_meas = np.sin(omega_mod*(time_axis-tau_m-tau_dl) + sim_config.psi)
-        sin_term_ref = np.sin(omega_mod*(time_axis-tau_r) + sim_config.psi)
+        
+        # --- 2. Calculate Main Channel Signal ---
+        tau_r = sim_config.ref_arml / sc.c
+        tau_m = sim_config.meas_arml / sc.c
+        
+        tau_dl = (0.5 * sim_config.arml_mod_amp * np.sin(2 * np.pi * sim_config.arml_mod_f * time_axis + sim_config.arml_mod_psi)
+                  + noise_arrays['armlength'] + sim_config.phi * sim_config.wavelength / (2 * np.pi)) / sc.c
+        
+        sin_term_meas = np.sin(omega_mod * (time_axis - tau_m - tau_dl) + sim_config.psi)
+        sin_term_ref = np.sin(omega_mod * (time_axis - tau_r) + sim_config.psi)
+        
         phi_static = omega_0_noisy * (tau_m - tau_r + tau_dl)
-        phi_mod = (df_noisy/sim_config.f_mod) * (sin_term_meas - sin_term_ref)
+        phi_mod = (df_noisy / sim_config.f_mod) * (sin_term_meas - sin_term_ref)
         phitot_main = phi_static + phi_mod
-        y_main = sim_config.amp + noise_arrays['amplitude'] + sim_config.amp*sim_config.visibility*np.cos(phitot_main)
-        y_ref = None # Simplified for brevity, you can fill this in
+        
+        y_main = sim_config.amp + noise_arrays['amplitude'] + sim_config.amp * sim_config.visibility * np.cos(phitot_main)
+        
+        # --- 3. Calculate Reference Channel Signal (if requested) ---
+        y_ref = None # Default to None
+        if create_ref_channel:
+            # REUSE common terms, only recalculate what's different
+            ref_opd_factor = sim_config.refifo_opd_factor
+            tau_r_ref = tau_r * ref_opd_factor
+            tau_m_ref = tau_m * ref_opd_factor
+            
+            # Recalculate only the delayed sine terms for the reference IFO.
+            # NOTE: The reference IFO is static (no tau_dl).
+            sin_term_meas_ref = np.sin(omega_mod * (time_axis - tau_m_ref) + sim_config.psi)
+            sin_term_ref_ref = np.sin(omega_mod * (time_axis - tau_r_ref) + sim_config.psi)
+
+            # The phase of the reference channel
+            phi_static_ref = omega_0_noisy * (tau_m_ref - tau_r_ref)
+            phi_mod_ref = (df_noisy / sim_config.f_mod) * (sin_term_meas_ref - sin_term_ref_ref)
+            phitot_ref = phi_static_ref + phi_mod_ref
+            
+            # The final signal for the reference channel
+            y_ref = sim_config.amp + noise_arrays['amplitude'] + sim_config.amp * sim_config.visibility * np.cos(phitot_ref)
+
+        # Ground-truth phase for analysis purposes
         phi_s_ground_truth = 2 * np.pi * (sc.c / sim_config.wavelength) * (tau_m - tau_r + tau_dl)
+
         return y_main, y_ref, phitot_main, phi_s_ground_truth
+    def _vectorized_downsample(self, signal, R):
+        """
+        Vectorized downsampling function using NumPy's reshape and mean.
+        
+        Parameters
+        ----------
+        signal : numpy.ndarray
+            The 1D signal array to be downsampled.
+        R : int
+            The downsampling factor (i.e., the buffer size).
+
+        Returns
+        -------
+        numpy.ndarray
+            The downsampled signal.
+        """
+        if R == 0: return np.array([])
+        # Trim the signal so its length is a multiple of R
+        trimmed_len = (len(signal) // R) * R
+        if trimmed_len == 0: return np.array([])
+        
+        trimmed_signal = signal[:trimmed_len]
+        # Reshape into a 2D array and take the mean along the new axis
+        return trimmed_signal.reshape(-1, R).mean(axis=1)
 
     def simulate_with_asd(self, label, n_seconds, simulate="dynamic", ref_channel=False, trial_num=0):
-        """Generates a signal using the detailed physics-based noise ASDs."""
-        # This is essentially your old `simulate` method, renamed.
-        # ... (its logic would call _generate_noise_arrays and _run_asd_*_simulation) ...
-        # ... (and create the DeepRawObject(s) at the end) ...
+        """
+        Generates a signal using the detailed physics-based noise ASDs.
+        This is the advanced simulation path that models multiple physical noise sources.
+        """
+        # --- 1. Setup Simulation Configuration and Time Axis ---
+        if label not in self.sims:
+            logging.error(f"Invalid simulation label: '{label}' !!"); return
+            
         sim_config = self.sims[label]
         num_samples = int(n_seconds * sim_config.f_samp)
         time_axis = np.arange(num_samples) / sim_config.f_samp
+        sim_config.N = len(time_axis)
+
+        logging.info(f"Simulating '{label}' ({simulate}) with ASDs for {n_seconds:.2f}s...")
+        t0 = time.time()
+        
+        # --- 2. Generate Noise and Run Physics Engine ---
         noise = self._generate_noise_arrays(sim_config, time_axis, trial_num)
+        
+        y_ref, phitot, phi_s = None, None, None
+        
         if simulate == "dynamic":
-             y_main, _, _, _ = self._run_asd_dynamic_simulation(sim_config, time_axis, noise)
-        else:
+             # Call the dynamic physics engine, explicitly passing the ref_channel flag
+             y_main, y_ref, phitot, phi_s = self._run_asd_dynamic_simulation(
+                 sim_config, time_axis, noise, create_ref_channel=ref_channel
+             )
+        else: # static
              y_main = self._run_asd_static_simulation(sim_config, time_axis, noise)
-        raw = DeepRawObject(data=pd.DataFrame(y_main, columns=["ch0"]))
-        # ... populate raw object ...
-        self.raws[label] = raw
+
+        sim_config.simtime = time.time() - t0
+        logging.info(f"ASD-based simulation finished in {sim_config.simtime:.3f} s.")
+
+        # --- 3. Create and Populate the Main Channel's Raw Data Object ---
+        raw_main = DeepRawObject(data=pd.DataFrame(y_main, columns=["ch0"]))
+        raw_main.label = label
+        raw_main.f_samp = sim_config.f_samp
+        raw_main.f_mod = sim_config.f_mod
+        raw_main.t0 = 0 
+        raw_main.sim = sim_config
+        # Store ground-truth signals for detailed analysis
+        raw_main.phi = phitot
+        raw_main.phi_sim = phi_s
+        if phi_s is not None:
+            # This call now correctly uses the class method
+            raw_main.phi_sim_downsamp = self._vectorized_downsample(phi_s, sim_config.R)
+        
+        raw_main.f_noise = noise['laser_frequency']
+        raw_main.a_noise = noise['amplitude']
+        raw_main.l_noise = noise['armlength']
+        raw_main.df_noise = noise['df']
+        
+        self.raws[label] = raw_main
+
+        # --- 4. Create and Populate the Reference Channel Object (if requested and created) ---
+        if ref_channel and y_ref is not None:
+            ref_label = label + '_ref'
+            raw_ref = DeepRawObject(data=pd.DataFrame(y_ref, columns=["ch0"]))
+            
+            # Populate all necessary metadata
+            raw_ref.label = ref_label
+            raw_ref.f_samp = sim_config.f_samp
+            raw_ref.f_mod = sim_config.f_mod
+            raw_ref.t0 = 0
+            
+            # Create a new, distinct simulation configuration for the reference channel
+            # to store its unique arm lengths and 'm' value.
+            ref_sim_config = copy.deepcopy(sim_config)
+            ref_sim_config.label = ref_label
+            ref_sim_config.ref_arml *= sim_config.refifo_opd_factor
+            ref_sim_config.meas_arml *= sim_config.refifo_opd_factor
+            ref_sim_config.m = 2 * np.pi * ref_sim_config.df * (ref_sim_config.meas_arml - ref_sim_config.ref_arml) / sc.c
+            
+            self.sims[ref_label] = ref_sim_config
+            raw_ref.sim = ref_sim_config
+            
+            # Store common noise signals for potential cross-correlation analysis
+            raw_ref.f_noise = noise['laser_frequency']
+            raw_ref.a_noise = noise['amplitude']
+            
+            self.raws[ref_label] = raw_ref
 
     def simulate(self, label, n_seconds, snr_db=None, simulate="dynamic", ref_channel=False, trial_num=0):
         """
@@ -552,6 +678,147 @@ class DeepFitFramework():
             'fitok': status,
             'b': b
         }
+    
+    def fit_ekf(self, label, fit_label=None, init_a=1.6, init_m=6.0, init_phi=0.0, init_psi=0.0, 
+                P0_diag=None, Q_diag=None, R_val=None):
+        """
+        Performs state estimation using an Extended Kalman Filter (EKF).
+
+        This method processes the raw data sequentially, sample by sample, to
+        provide a time-varying estimate of the interferometer's state. It is
+        particularly useful for tracking dynamic changes.
+
+        Parameters
+        ----------
+        label : str
+            The label of the DeepRawObject containing the raw data to process.
+        fit_label : str, optional
+            The label for the output DeepFitObject. If None, defaults to `label + '_ekf'`.
+        init_a, init_m, init_phi, init_psi : float, optional
+            Initial guesses for the state parameters.
+        P0_diag : list or np.ndarray, optional
+            A 5-element list specifying the initial variances for the diagonal
+            of the state covariance matrix `P`. Represents the initial uncertainty
+            of the state guess. Defaults to `[1, 1, 1, 1, 1]`.
+        Q_diag : list or np.ndarray, optional
+            A 5-element list specifying the process noise variances for the
+            state vector `[a, m, phi, psi, dc]`. This is a critical tuning
+            parameter that determines how quickly the filter adapts to changes.
+            Defaults to `[1e-8, 1e-8, 1e-6, 1e-6, 1e-8]`.
+        R_val : float, optional
+            The measurement noise variance. Represents the variance of the
+            electronic noise on a single voltage sample. If None, it is
+            estimated from the raw data. Defaults to None.
+        
+        Returns
+        -------
+        DeepFitObject
+            A fit object containing the time-series of the estimated parameters.
+        """
+        if fit_label is None:
+            fit_label = label + '_ekf'
+        if label not in self.raws:
+            logging.error(f"Invalid raw data label: '{label}' !!"); return
+
+        raw_obj = self.raws[label]
+        data = raw_obj.data["ch0"].to_numpy()
+        
+        # --- 1. EKF Initialization ---
+        # State vector: x = [amplitude, mod_depth, phase, mod_phase, dc_offset]
+        dim_x = 5
+        x = np.array([init_a, init_m, init_phi, init_psi, np.mean(data)])
+
+        # Initial state covariance P0: Represents our initial uncertainty.
+        if P0_diag is None: P0_diag = [1.0, 1.0, 1.0, 1.0, 1.0]
+        P = np.diag(P0_diag)
+        
+        # Process noise Q: A key tuning parameter. How much we expect the state to change.
+        if Q_diag is None: Q_diag = [1e-8, 1e-8, 1e-6, 1e-6, 1e-8]
+        Q = np.diag(Q_diag)
+        
+        # Measurement noise R: Variance of the ADC/photodiode noise.
+        if R_val is None: R_val = np.var(data)
+        R = np.array([[R_val]]) # Must be a 1x1 matrix
+
+        # Process model Jacobian F: For a random walk model, F is the identity matrix.
+        F = np.eye(dim_x)
+        
+        # Setup for the run
+        n_samp = len(data)
+        w_m = 2 * np.pi * raw_obj.f_mod
+        t_axis = np.arange(n_samp) / raw_obj.f_samp
+        
+        # Arrays to store the results
+        # We will downsample the results to match the NLS fitter's rate
+        n_fit_cycles = self.sims[label].fit_n if label in self.sims else 20
+        R_downsample, fs, nbuf = self.fit_init(label, n_fit_cycles)
+
+        results = np.zeros((nbuf, dim_x))
+        innovations = np.zeros(n_samp)
+
+        logging.info(f"Running EKF for {n_samp} samples...")
+        
+        # --- 2. Main EKF Loop ---
+        for k in tqdm(range(n_samp)):
+            # --- PREDICT STEP ---
+            # For a random walk model, the state prediction is just the previous state.
+            # x_priori = F @ x  (but F is identity)
+            P = F @ P @ F.T + Q
+
+            # --- UPDATE STEP ---
+            # Calculate the measurement model Jacobian (H) at the current state
+            a, m, phi, psi, dc = x
+            theta = w_m * t_axis[k] + psi
+            
+            cos_theta = np.cos(theta)
+            sin_theta = np.sin(theta)
+            full_phase_arg = phi + m * cos_theta
+            cos_full_arg = np.cos(full_phase_arg)
+            sin_full_arg = np.sin(full_phase_arg)
+
+            h_x = a * cos_full_arg + dc # The model's prediction of the measurement
+            
+            # H = [dh/da, dh/dm, dh/dphi, dh/dpsi, dh/ddc]
+            H = np.zeros((1, dim_x))
+            H[0, 0] = cos_full_arg
+            H[0, 1] = -a * sin_full_arg * cos_theta
+            H[0, 2] = -a * sin_full_arg
+            H[0, 3] = a * m * sin_full_arg * sin_theta
+            H[0, 4] = 1.0
+
+            # Calculate the innovation (residual)
+            z_k = data[k]
+            y_k = z_k - h_x
+            innovations[k] = y_k
+
+            # Calculate the Kalman Gain
+            S = H @ P @ H.T + R
+            K = (P @ H.T) @ np.linalg.inv(S)
+
+            # Update the state and covariance
+            x = x + (K @ y_k.reshape(1,1)).flatten()
+            P = (np.eye(dim_x) - K @ H) @ P
+
+            # --- Store result at the downsampled rate ---
+            if (k + 1) % R_downsample == 0:
+                buf_idx = (k + 1) // R_downsample - 1
+                if buf_idx < nbuf:
+                    results[buf_idx, :] = x
+
+        # --- 3. Create and return a standard DeepFitObject ---
+        logging.info("EKF processing finished. Creating fit object...")
+        
+        # To reuse the existing helper, we need to create a temporary DataFrame
+        df_dict = {
+            'amp': results[:, 0], 'm': results[:, 1], 'phi': results[:, 2],
+            'psi': results[:, 3], 'dc': results[:, 4],
+            'ssq': np.zeros(nbuf), # SSQ is not calculated in EKF, use innovation variance later
+            'fitok': np.ones(nbuf) # Assume fit was ok if it didn't diverge
+        }
+        self.fits_df[fit_label] = pd.DataFrame(df_dict)
+        
+        # Use our standard object creation helper
+        return self._create_fit_object_from_df(fit_label, raw_obj.label, n_fit_cycles, R_downsample, fs, nbuf, 0, init_a, init_m)
 
     def fit(self, label, n=None, init_a=1.6, init_m=6.0, ndata=10, fit_label=None, init_psi=False, verbose=True, parallel=True, n_cores=None):
         """
