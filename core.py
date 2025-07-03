@@ -267,7 +267,7 @@ class DeepFitFramework():
             logging.info('Downsampling factor: {}'.format(self.R))
             logging.info('Fit data rate: {}'.format(self.fs))
 
-    def _generate_noise_arrays(self, sim_config, time_axis, seed=1):
+    def _generate_noise_arrays(self, sim_config, time_axis, trial_num=0):
         """
         Helper function to generate all required noise time-series arrays.
 
@@ -294,7 +294,7 @@ class DeepFitFramework():
         basis_noises = {}
         
         # Use a different seed for each spectral shape to ensure independence
-        seed_counter = seed 
+        seed_counter = 1 + trial_num * len(noise_params) # Ensures unique seeds across trials
         
         for name, params in noise_params.items():
             alpha_val = params['alpha']
@@ -406,7 +406,7 @@ class DeepFitFramework():
 
         return y_main, y_ref, phitot_main, phi_s_ground_truth
 
-    def simulate(self, label, n_buffers=None, n_seconds=None, simulate="dynamic", ref_channel=False, seed=1):
+    def simulate(self, label, n_buffers=None, n_seconds=None, simulate="dynamic", ref_channel=False, trial_num=0):
         """
         Main entry point for running a simulation.
         
@@ -434,7 +434,7 @@ class DeepFitFramework():
         t0 = time.time()
         logging.info(f"Simulating '{label}' ({simulate}) for {len(time_axis)/sim_config.f_samp:.2f} seconds...")
         
-        noise = self._generate_noise_arrays(sim_config, time_axis, seed=seed)
+        noise = self._generate_noise_arrays(sim_config, time_axis, trial_num=trial_num)
         
         if simulate == "dynamic":
             y_main, y_ref, phitot, phi_s = self._run_dynamic_simulation(sim_config, time_axis, noise)
