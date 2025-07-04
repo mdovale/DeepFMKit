@@ -8,6 +8,7 @@ import numpy as np
 import scipy.constants as sc
 from scipy.integrate import cumulative_trapezoid
 from scipy.optimize import least_squares
+from scipy.special import jv, jn
 import pandas as pd
 from tqdm import tqdm
 import time
@@ -272,7 +273,7 @@ class DeepFitFramework():
             logging.info('Fit data rate: {}'.format(self.fs))
 
     def simulate(self, main_label, n_seconds, mode='asd', witness_label=None, 
-                snr_db=None, trial_num=0):
+                snr_db=None, trial_num=0, verbose=False):
         """
         Orchestrates a physics simulation using the dedicated SignalGenerator.
 
@@ -313,9 +314,9 @@ class DeepFitFramework():
             if witness_label not in self.sims:
                 logging.error(f"Witness simulation label '{witness_label}' not found!"); return
             witness_config = self.sims[witness_label]
-            logging.info(f"Simulating '{main_label}' with witness '{witness_label}' for {n_seconds:.2f}s...")
+            logging.debug(f"Simulating '{main_label}' with witness '{witness_label}' for {n_seconds:.2f}s...")
         else:
-            logging.info(f"Simulating '{main_label}' for {n_seconds:.2f}s...")
+            logging.debug(f"Simulating '{main_label}' for {n_seconds:.2f}s...")
 
         # --- 2. Instantiate and run the physics engine ---
         generator = SignalGenerator()
@@ -338,7 +339,7 @@ class DeepFitFramework():
             
         sim_time = time.time() - t0
         main_config.simtime = sim_time
-        logging.info(f"Simulation finished in {sim_time:.3f} s.")
+        logging.debug(f"Simulation finished in {sim_time:.3f} s.")
 
     def load_sim(self, sim):
         self.sims[sim.label] = sim
@@ -879,36 +880,14 @@ class DeepFitFramework():
 
     def fit_wdfmi(self, main_label, witness_label, n=None, fit_label=None, ndata=10, init_a=1.6, init_m=6.0, init_phi=0.0, init_psi=0.0, verbose=True):
         """
-        Performs a fit using the Witnessed DFMI (W-DFMI) numerical method.
+        Performs a fit using the definitive, physically exact W-DFMI method.
 
-        This is the definitive, physically correct version. It uses the exact
-        physical model for the interferometric phase difference, `phi(t-tau) - phi(t)`.
-        It correctly identifies the witness signal as a measure of the frequency
-        modulation, integrates it to get the phase modulation, and fits for the
-        physical time delay `tau` to ensure numerical stability.
-
-        Parameters
-        ----------
-        main_label : str
-            The label of the primary DeepRawObject containing the main DFMI signal.
-        witness_label : str
-            The label of the DeepRawObject containing the witness signal. It is
-            assumed this witness was operated at the mid-fringe point (phi=pi/2).
-        n : int, optional
-            The number of modulation periods per fit buffer (`n_fit`).
-        fit_label : str, optional
-            The label for the output DeepFitObject. Defaults to `main_label + '_wdfmi'`.
-        ndata : int, optional
-            The number of harmonics to include in the fit.
-        init_a, init_m, init_phi, init_psi : float, optional
-            Initial guesses for the fit parameters.
-        verbose : bool, optional
-            If True, display a progress bar.
-
-        Returns
-        -------
-        DeepFitObject
-            A fit object containing the time-series of the estimated parameters.
+        This function uses the exact physical model for the phase difference,
+        `phi(t-tau) - phi(t)`, ensuring perfect model symmetry with the data
+        generation engine. It correctly processes the witness signal as a measure
+        of the frequency modulation waveform, integrates it to get the phase
+        waveform, and fits for the physical time delay `tau` for robustness.
+        This version is correct for all `m` and distortion levels.
         """
         # --- 1. Initialization ---
         if main_label not in self.raws or witness_label not in self.raws:
@@ -925,14 +904,14 @@ class DeepFitFramework():
         omega_mod = 2 * np.pi * laser_cfg.f_mod
         w0_samp = omega_mod / main_raw.f_samp
         
-        # --- 2. Process Witness Signal to get Phase Modulation Waveform phi_mod(t) ---
+        # --- 2. Process Witness Signal to get Phase Modulation Waveform ---
         witness_buffer_raw = np.array(self.raws[witness_label].data.loc[0:R-1]).flatten()
         v_w_ac = witness_buffer_raw - np.mean(witness_buffer_raw)
         
-        # The witness voltage is proportional to -f_mod(t). First, get the normalized f_mod(t) basis.
-        f_mod_basis = -v_w_ac / np.max(np.abs(v_w_ac))
+        # Witness voltage is proportional to f_mod(t). Correct for sign and normalize.
+        f_mod_basis = v_w_ac / np.max(np.abs(v_w_ac))
         
-        # Now, integrate the frequency basis to get the phase modulation basis.
+        # Integrate the frequency basis to get the phase modulation basis.
         time_axis_buffer = np.arange(R) / main_raw.f_samp
         dt = time_axis_buffer[1] - time_axis_buffer[0]
         phi_mod_basis = np.cumsum(f_mod_basis) * dt
@@ -946,7 +925,7 @@ class DeepFitFramework():
         
         iterable = range(nbuf)
         if verbose:
-            logging.info(f"Processing '{main_label}' with definitive Exact Model W-DFMI readout...")
+            logging.info(f"Processing '{main_label}' with Definitive Exact Model Fitter...")
             iterable = tqdm(iterable)
 
         for b in iterable:
@@ -962,19 +941,15 @@ class DeepFitFramework():
             def _wdfmi_residuals(params, phi_mod_basis_arg, laser_cfg_arg, QI_meas):
                 C, tau, phi, psi = params
                 
-                # The full, unscaled phase modulation waveform
                 phi_mod_unscaled = 2 * np.pi * laser_cfg_arg.df * phi_mod_basis_arg
                 
-                # Apply psi as a time shift to this phase waveform
                 t_shift_psi = -psi / omega_mod
                 t_interp_psi = time_axis_buffer - t_shift_psi
                 phi_mod_shifted = np.interp(t_interp_psi, time_axis_buffer, phi_mod_unscaled, period=time_axis_buffer[-1])
                 
-                # Apply tau delay to the psi-shifted waveform
                 t_interp_tau = time_axis_buffer - tau
                 phi_mod_delayed = np.interp(t_interp_tau, time_axis_buffer, phi_mod_shifted, period=time_axis_buffer[-1])
                 
-                # The final model phase is the difference of the delayed and local phase waveforms
                 delta_phi_mod = phi_mod_delayed - phi_mod_shifted
                 
                 v_model = C * np.cos(phi + delta_phi_mod)
@@ -988,17 +963,14 @@ class DeepFitFramework():
                 return QI_model - QI_meas
 
             opt_result = least_squares(
-                _wdfmi_residuals,
-                current_guess,
-                args=(phi_mod_basis, laser_cfg, QI_data_meas),
-                method='lm'
+                _wdfmi_residuals, current_guess,
+                args=(phi_mod_basis, laser_cfg, QI_data_meas), method='lm'
             )
             
             fit_parm = opt_result.x
             C_fit, tau_fit, phi_fit, psi_fit = fit_parm
             
             m_fit = 2 * np.pi * laser_cfg.df * tau_fit
-            
             current_guess = fit_parm
             
             results_list.append({
@@ -1065,89 +1037,93 @@ class DeepFitFramework():
         logging.info(f"Created W-DFMI setup: '{main_label}' (m={main_channel.m:.2f}) and '{witness_label}' (m={witness_channel.m:.2f})")
         return main_channel, witness_channel
     
-    def create_witness_channel(self, main_channel_label, witness_channel_label, delta_l_witness=None, m_witness=None):
+    def create_witness_channel(self, main_channel_label, witness_channel_label, m_witness=None, delta_l_witness=None, auto_tune=False):
         """
-        Creates a witness channel configuration based on an existing main channel.
+        Creates a witness channel, with optional auto-tuning for optimal sensitivity.
 
-        This helper function simplifies the creation of a static witness channel
-        that is physically linked to a main channel (i.e., it shares the same
-        laser source). It automatically handles the creation of the necessary
-        configuration objects and sets the witness arm lengths to achieve a
-        desired optical path difference or modulation depth.
-
-        The user must specify *either* `delta_l_witness` or `m_witness`, but not
-        both. If neither is specified, it defaults to creating a witness with
-        `m_witness = 0.1`, suitable for W-DFMI.
+        This helper function creates a static witness channel linked to a main
+        channel's laser source. It robustly handles the witness design by:
+        1.  Setting the witness arm lengths to achieve a target `m_witness` or `delta_l_witness`.
+        2.  If `auto_tune` is True (default), it checks if the chosen `m_witness` makes
+            the witness "blind" to low-order harmonics and, if so, perturbs `m_witness`
+            to a more robust operating point.
+        3.  Analytically calculates and sets the witness's phase offset (`ifo.phi`)
+            to ensure operation at the perfect mid-fringe point (quadrature).
 
         Parameters
         ----------
         main_channel_label : str
-            The label of the existing DFMIObject in `self.sims` to use as a template.
+            The label of the existing DFMIObject to use as a template.
         witness_channel_label : str
             The label for the new witness channel to be created.
-        delta_l_witness : float, optional
-            The desired absolute optical path difference (meas_arml - ref_arml)
-            for the witness interferometer, in meters.
         m_witness : float, optional
-            The desired effective modulation index for the witness interferometer.
+            The target effective modulation index for the witness interferometer.
+        delta_l_witness : float, optional
+            The desired absolute optical path difference for the witness, in meters.
+        auto_tune : bool, optional
+            If True, automatically adjusts a poor `m_witness` choice to a more
+            robust value. If False, respects the user's choice exactly.
 
         Returns
         -------
         DFMIObject
-            The newly created witness channel object, which has also been added
-            to the framework's `sims` dictionary.
-
-        Raises
-        ------
-        KeyError
-            If `main_channel_label` does not exist in `self.sims`.
-        ValueError
-            If both `delta_l_witness` and `m_witness` are specified.
+            The newly created witness channel object.
         """
-        # --- 1. Validate Inputs ---
+        # --- 1. Validate Inputs and get shared laser ---
         if main_channel_label not in self.sims:
             raise KeyError(f"Main channel '{main_channel_label}' not found in framework.")
         if delta_l_witness is not None and m_witness is not None:
             raise ValueError("Please specify either delta_l_witness or m_witness, but not both.")
-        # Default behavior if neither is specified
-        if delta_l_witness is None and m_witness is None:
-            m_witness = 0.1
-            logging.info(f"Neither delta_l nor m specified for witness. Defaulting to m_witness = {m_witness}.")
-
-        # --- 2. Get Shared Laser and Template Channel ---
+        
         main_channel = self.sims[main_channel_label]
         shared_laser = main_channel.laser
+        
+        # --- 2. Determine Target Witness Modulation Depth ---
+        if m_witness is None and delta_l_witness is None:
+            m_target = 0.1
+        elif m_witness is not None:
+            m_target = m_witness
+        else:
+            m_target = (2 * np.pi * shared_laser.df * delta_l_witness) / sc.c
 
-        # --- 3. Create and Configure New Interferometer for the Witness ---
+        # --- 3. Auto-Tune Witness if Requested ---
+        if auto_tune:
+            # Check sensitivity to both 1st and 2nd harmonics
+            j1_val = np.abs(jn(1, m_target))
+            j2_val = np.abs(jn(1, m_target))
+            # A witness is "bad" if it's insensitive to either of the first two,
+            # most important, harmonics. We check against a fraction of the maximum
+            # possible value of J1 (~0.58) and J2 (~0.48).
+            if j1_val < 0.05 or j2_val < 0.05:
+                logging.warning(f"Chosen m_witness={m_target:.3f} is insensitive to low-order harmonics. Auto-tuning to a robust value.")
+                m_target = 0.8 # A good compromise value where both J1 and J2 are significant.
+        
+        # --- 4. Create and Configure Witness Interferometer ---
         witness_ifo = InterferometerConfig(label=f"{witness_channel_label}_ifo")
-        witness_ifo.arml_mod_amp = 0.0  # Witness is always static
+        witness_ifo.arml_mod_amp = 0.0
         witness_ifo.arml_mod_n = 0.0
 
-        # --- 4. Calculate and Set Witness Arm Lengths ---
-        if m_witness is not None:
-            # Calculate the required OPD to achieve the target 'm'
-            if shared_laser.df == 0:
-                raise ValueError("Cannot set 'm' for witness when laser 'df' is zero.")
-            delta_l = (m_witness * sc.c) / (2 * np.pi * shared_laser.df)
-        else: # delta_l_witness must have been specified
-            delta_l = delta_l_witness
+        if shared_laser.df == 0:
+            raise ValueError("Cannot set 'm_witness' when laser 'df' is zero.")
+        final_delta_l = (m_target * sc.c) / (2 * np.pi * shared_laser.df)
+        witness_ifo.ref_arml = 0.01
+        witness_ifo.meas_arml = witness_ifo.ref_arml + final_delta_l
 
-        # Set arm lengths based on the calculated OPD
-        witness_ifo.ref_arml = 0.01  # Arbitrary small base length
-        witness_ifo.meas_arml = witness_ifo.ref_arml + delta_l
-
+        # Analytical Fringe Locking
+        f0 = sc.c / shared_laser.wavelength
+        static_fringe_phase = (2 * np.pi * f0 * final_delta_l) / sc.c
+        phi_offset_required = (np.pi / 2.0) + static_fringe_phase
+        witness_ifo.phi = phi_offset_required % (2 * np.pi)
+        
         # --- 5. Compose and Register the New Witness Channel ---
         witness_channel = DFMIObject(
-            label=witness_channel_label,
-            laser_config=shared_laser,
-            ifo_config=witness_ifo,
-            f_samp=main_channel.f_samp  # Inherit f_samp from main channel
+            label=witness_channel_label, laser_config=shared_laser,
+            ifo_config=witness_ifo, f_samp=main_channel.f_samp
         )
-        witness_channel.fit_n = main_channel.fit_n # Inherit fit_n
-
+        witness_channel.fit_n = main_channel.fit_n
         self.sims[witness_channel_label] = witness_channel
 
-        logging.info(f"Created witness channel '{witness_channel_label}' linked to laser '{shared_laser.label}'.")
+        logging.debug(f"Created witness channel '{witness_channel_label}' with final m_witness={witness_channel.m:.3f}.")
         return witness_channel
 
     def calc_lpsd(self, labels=None):

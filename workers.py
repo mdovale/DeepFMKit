@@ -2,72 +2,6 @@ import DeepFMKit.core as dfm
 import numpy as np
 import scipy.constants as sc
 
-
-# def run_single_trial(params):
-#     """
-#     Worker function for a single simulation/fit trial. Executed by a pool process.
-
-#     This function is self-contained. It creates its own framework instance to avoid
-#     sharing objects across processes. It simulates one data set with a unique trial
-#     number (for seeding) and returns the single float result.
-
-#     Parameters
-#     ----------
-#     params : dict
-#         A dictionary containing all parameters for this single trial run.
-
-#     Returns
-#     -------
-#     float
-#         The result of the fit. If sim_type is 'stat', this is the fitted 'm'.
-#         If sim_type is 'sys', this is the bias ('m_fit' - 'm_true').
-#     """
-#     # Unpack parameters
-#     trial_num = params['trial_num']
-#     T_acq = params['T_acq']
-#     sim_type = params['sim_type']
-#     m_true = params['m_true']
-#     delta_f = params['delta_f']
-#     amp_asd = params['amp_asd']
-#     freq_asd = params['freq_asd']
-#     ndata = params['ndata']
-
-#     # Each process gets its own instance of the framework
-#     dff = dfm.DeepFitFramework()
-#     label = f"worker_{trial_num}"
-#     dff.new_sim(label)
-#     sim = dff.sims[label]
-#     sim.m = m_true
-#     sim.df = delta_f
-#     sim.ndata = ndata
-
-#     # Configure noise based on simulation type
-#     if sim_type == 'stat':
-#         sim.amp_n = amp_asd
-#         sim.f_n = 0.0
-#     elif sim_type == 'sys':
-#         sim.amp_n = 0.0
-#         sim.f_n = freq_asd
-
-#     # Simulate and fit the entire acquisition as one buffer
-#     dff.simulate(label, n_seconds=T_acq, trial_num=trial_num)
-#     fit_n = int(sim.f_mod * T_acq)
-#     fit_obj = dff.fit(label, n=fit_n, verbose=False, parallel=False)
-
-#     if fit_obj and fit_obj.m.size > 0:
-#         m_fit = fit_obj.m[-1]
-#         if sim_type == 'stat':
-#             return m_fit
-#         elif sim_type == 'sys':
-#             return m_fit - m_true
-    
-#     return m_true if sim_type == 'stat' else 0.0
-
-
-import DeepFMKit.core as dfm
-import numpy as np
-import scipy.constants as sc
-
 def run_single_trial(params):
     """
     Worker function for a single simulation/fit trial, using a "Stitched Phase Noise" method.
@@ -198,3 +132,152 @@ def run_single_trial(params):
         return m_fit - m_true
 
     return 0.0
+
+# In workers.py
+
+import DeepFMKit.core as dfm
+import numpy as np
+
+def calculate_bias_for_point(params):
+    """
+    Worker function to calculate mean and worst-case bias for a single (m, epsilon) point.
+
+    This function is executed by a pool process. It runs a full Monte Carlo
+    simulation over the random phase of the 2nd harmonic distortion for a
+    single specified m_main and epsilon value. For both the standard NLS and
+    the W-DFMI fitters, it computes both the mean bias and the maximum
+    absolute bias observed across all random phase trials.
+
+    Parameters
+    ----------
+    params : dict
+        A dictionary containing all parameters for this single grid point.
+        Expected keys: 'm_main', 'epsilon', 'n_phase_trials', 'm_witness',
+        'grid_i', 'grid_j'.
+
+    Returns
+    -------
+    tuple
+        A tuple containing (grid_i, grid_j, mean_std_bias, worst_std_bias,
+        mean_wdfmi_bias, worst_wdfmi_bias) for reconstructing the result grids.
+    """
+    # Unpack parameters
+    m_main = params['m_main']
+    epsilon = params['epsilon']
+    n_phase_trials = params['n_phase_trials']
+    m_witness = params['m_witness']
+    grid_i = params['grid_i']
+    grid_j = params['grid_j']
+
+    standard_biases = []
+    wdfmi_biases = []
+    
+    # Dynamically calculate ndata needed for this m
+    ndata = int(m_main + 20)
+
+    # Monte Carlo loop
+    for _ in range(n_phase_trials):
+        dff = dfm.DeepFitFramework()
+        
+        laser_config = dfm.LaserConfig()
+        main_ifo_config = dfm.InterferometerConfig()
+        
+        laser_config.df_2nd_harmonic_frac = epsilon
+        laser_config.df_2nd_harmonic_phase = np.random.uniform(0, 2 * np.pi)
+        
+        main_label = "main"
+        main_channel = dfm.DFMIObject(main_label, laser_config, main_ifo_config)
+        
+        opd_main = main_ifo_config.meas_arml - main_ifo_config.ref_arml
+        if opd_main == 0: continue
+        laser_config.df = (m_main * dfm.sc.c) / (2 * np.pi * opd_main)
+        dff.sims[main_label] = main_channel
+
+        witness_label = "witness"
+        witness_channel = dff.create_witness_channel(
+            main_channel_label=main_label,
+            witness_channel_label=witness_label,
+            m_witness=m_witness,
+            auto_tune=False
+        )
+        witness_channel.ifo.phi = np.pi / 2.0
+        
+        n_seconds = main_channel.fit_n / laser_config.f_mod
+        dff.simulate(main_label, n_seconds=n_seconds, witness_label=witness_label)
+        
+        fit_obj_std = dff.fit(main_label, fit_label="std_fit", ndata=ndata, verbose=False, parallel=False)
+        if fit_obj_std and fit_obj_std.m.size > 0:
+            standard_biases.append(fit_obj_std.m[0] - m_main)
+
+        fit_obj_wdfmi = dff.fit_wdfmi(main_label, witness_label, fit_label="wdfmi_fit", ndata=ndata, verbose=False)
+        if fit_obj_wdfmi and fit_obj_wdfmi.m.size > 0:
+            wdfmi_biases.append(fit_obj_wdfmi.m[0] - m_main)
+
+    # Convert lists to numpy arrays for easier calculation
+    standard_biases_arr = np.array(standard_biases) if standard_biases else np.array([0])
+    wdfmi_biases_arr = np.array(wdfmi_biases) if wdfmi_biases else np.array([0])
+
+    # Calculate statistics for both fitters
+    mean_std_bias = np.mean(standard_biases_arr)
+    worst_std_bias = np.max(np.abs(standard_biases_arr))
+    
+    mean_wdfmi_bias = np.mean(wdfmi_biases_arr)
+    worst_wdfmi_bias = np.max(np.abs(wdfmi_biases_arr))
+    
+    return (grid_i, grid_j, mean_std_bias, worst_std_bias, mean_wdfmi_bias, worst_wdfmi_bias)
+
+def calculate_bias_for_m_vs_mwitness(params):
+    """
+    Worker function to calculate W-DFMI bias for a single (m_main, m_witness) point.
+
+    This function simulates a non-distorted DFMI signal and fits it with the
+    W-DFMI algorithm to isolate residual biases caused by the interaction
+    between the main and witness channel configurations.
+    """
+    m_main = params['m_main']
+    m_witness = params['m_witness']
+    witness_phi = params['witness_phi']
+    grid_i = params['grid_i']
+    grid_j = params['grid_j']
+    
+    dff = dfm.DeepFitFramework()
+    
+    laser_config = dfm.LaserConfig()
+    main_ifo_config = dfm.InterferometerConfig()
+    
+    # No distortion for this test
+    laser_config.df_2nd_harmonic_frac = 0.0
+    
+    main_label = "main"
+    main_channel = dfm.DFMIObject(main_label, laser_config, main_ifo_config)
+    
+    opd_main = main_ifo_config.meas_arml - main_ifo_config.ref_arml
+    if opd_main == 0: return (grid_i, grid_j, 0)
+    laser_config.df = (m_main * dfm.sc.c) / (2 * np.pi * opd_main)
+    dff.sims[main_label] = main_channel
+
+    witness_label = "witness"
+    # Create the witness but disable auto-tuning to respect the m_witness value
+    witness_channel = dff.create_witness_channel(
+        main_channel_label=main_label,
+        witness_channel_label=witness_label,
+        m_witness=m_witness,
+        auto_tune=False # Crucial for this test
+    )
+    # Set the desired witness phase
+    if witness_phi is not None:
+        witness_channel.ifo.phi = witness_phi
+    
+    n_seconds = main_channel.fit_n / laser_config.f_mod
+    dff.simulate(main_label, n_seconds=n_seconds, witness_label=witness_label)
+    
+    # Use enough harmonics to avoid truncation error
+    ndata = int(m_main + 10)
+    
+    fit_obj_wdfmi = dff.fit_wdfmi(main_label, witness_label, fit_label="wdfmi_fit", ndata=ndata, verbose=False)
+    
+    bias = 0
+    if fit_obj_wdfmi and fit_obj_wdfmi.m.size > 0:
+        bias = fit_obj_wdfmi.m[0] - m_main
+        
+    return (grid_i, grid_j, bias)
