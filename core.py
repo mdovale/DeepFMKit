@@ -1,14 +1,16 @@
 from .plotting import *
 from .fit import *
 from .data import *
+from .physics import *
+from .dsp import *
 
 import numpy as np
 import scipy.constants as sc
+from scipy.integrate import cumulative_trapezoid
+from scipy.optimize import least_squares
 import pandas as pd
 from tqdm import tqdm
-import pyplnoise
 import time
-import copy
 import matplotlib.pyplot as plt
 plt.rcParams.update(default_rc)
 
@@ -154,6 +156,8 @@ class DeepFitFramework():
     def __init__(self, raw_file=None, fit_file=None, raw_labels=None, fit_labels=None):
         self.raw_file = raw_file   # Path to raw data file
         self.fit_file = fit_file   # Path to fit data file
+        self.lasers = {}           # Dictionary of LaserConfig
+        self.ifos = {}             # Dictionary of InterferometerConfig
         self.sims = {}             # Dictionary of DFMIObject
         self.raws = {}             # Dictionary of DeepRawObject
         self.fits = {}             # Dictionary of DeepFitObject
@@ -267,387 +271,74 @@ class DeepFitFramework():
             logging.info('Downsampling factor: {}'.format(self.R))
             logging.info('Fit data rate: {}'.format(self.fs))
 
-    def _generate_ideal_signal(self, sim_config, time_axis, is_dynamic, is_ref_channel=False):
-        """Generates a perfect, noiseless DFMI signal for SNR-based simulation."""
-        A = sim_config.amp
-        C = sim_config.visibility
-        omega_mod = 2 * np.pi * sim_config.f_mod
-        omega_0 = 2 * np.pi * sc.c / sim_config.wavelength
-        
-        opd_factor = sim_config.refifo_opd_factor if is_ref_channel else 1.0
-        tau_r = (sim_config.ref_arml * opd_factor) / sc.c
-        tau_m = (sim_config.meas_arml * opd_factor) / sc.c
-
-        if is_dynamic and not is_ref_channel:
-            tau_dl = (0.5 * sim_config.arml_mod_amp * np.sin(2 * np.pi * sim_config.arml_mod_f * time_axis + sim_config.arml_mod_psi)
-                      + sim_config.phi * sim_config.wavelength / (2 * np.pi)) / sc.c
-            sin_term_meas = np.sin(omega_mod * (time_axis - tau_m - tau_dl) + sim_config.psi)
-            sin_term_ref = np.sin(omega_mod * (time_axis - tau_r) + sim_config.psi)
-            phi_static = omega_0 * (tau_m - tau_r + tau_dl)
-            phi_mod = (sim_config.df / sim_config.f_mod) * (sin_term_meas - sin_term_ref)
-            phitot = phi_static + phi_mod
-        else:
-            m = 2 * np.pi * sim_config.df * (tau_m - tau_r)
-            phitot = sim_config.phi + m * np.cos(omega_mod * time_axis + sim_config.psi)
-
-        return A * (1 + C * np.cos(phitot))
-
-    def _add_white_noise(self, clean_signal, snr_db, trial_num):
-        """Adds white Gaussian noise to a signal to achieve a target SNR."""
-        signal_ac = clean_signal - np.mean(clean_signal)
-        signal_power = np.mean(signal_ac**2)
-        snr_linear_power = 10**(snr_db / 10.0)
-        noise_power = signal_power / snr_linear_power
-        noise_std_dev = np.sqrt(noise_power)
-        
-        rng = np.random.RandomState(seed=trial_num)
-        noise = rng.randn(len(clean_signal)) * noise_std_dev
-        return clean_signal + noise
-
-    def simulate_with_snr(self, label, n_seconds, snr_db, trial_num=0):
+    def simulate(self, main_label, n_seconds, mode='asd', witness_label=None, 
+                snr_db=None, trial_num=0):
         """
-        Generates a DFMI signal with a specific Signal-to-Noise Ratio.
+        Orchestrates a physics simulation using the dedicated SignalGenerator.
 
-        This method is ideal for statistical tests like CRLB validation, as it
-        adds simple white Gaussian noise to a perfect underlying signal.
-        """
-        if label not in self.sims:
-            logging.error(f"Invalid simulation label: '{label}' !!"); return
+        This method acts as a high-level wrapper. It retrieves simulation
+        configurations from the framework's `sims` dictionary and passes them
+        to a SignalGenerator instance. The resulting raw data objects are
+        then added to the framework's `raws` dictionary.
 
-        sim_config = self.sims[label]
-        num_samples = int(n_seconds * sim_config.f_samp)
-        time_axis = np.arange(num_samples) / sim_config.f_samp
-        sim_config.N = len(time_axis)
-
-        logging.info(f"Simulating '{label}' for {n_seconds:.2f}s with SNR={snr_db} dB...")
-        t0 = time.time()
-        
-        # Use the static model for simplicity, as this method is for statistical tests
-        y_clean = self._generate_ideal_signal(sim_config, time_axis, is_dynamic=False)
-        y_noisy = self._add_white_noise(y_clean, snr_db, trial_num)
-        
-        # Create the raw object and correctly populate ALL its metadata
-        raw_obj = DeepRawObject(data=pd.DataFrame(y_noisy, columns=["ch0"]))
-        raw_obj.label = label
-        raw_obj.f_samp = sim_config.f_samp
-        raw_obj.f_mod = sim_config.f_mod
-        raw_obj.t0 = 0 # Or another appropriate value
-        raw_obj.sim = sim_config
-        
-        self.raws[label] = raw_obj
-        
-        sim_config.simtime = time.time() - t0
-        logging.info(f"Simple simulation finished in {sim_config.simtime:.3f} s.")
-
-    def _generate_noise_arrays(self, sim_config, time_axis, trial_num=0):
-        """
-        Generates time-series noise arrays for different physical sources.
-
-        This function creates noise based on the Amplitude Spectral Density (ASD)
-        and noise color (`alpha`) defined in the simulation configuration.
-
-        It implements special, optimized handling for white noise sources
-        ('amplitude', 'df'), using `numpy.random.normal`. The required standard
-        deviation (`sigma`) for the time series is calculated from the target ASD
-        using the relation: `sigma = ASD * sqrt(sampling_rate / 2)`.
-
-        For other, colored noise sources (like 1/f laser frequency drift), it
-        continues to use the `pyplnoise` library to generate the appropriate
-        time series.
+        This approach allows for clean generation of linked channels, such as
+        a main channel and a witness channel for W-DFMI studies.
 
         Parameters
         ----------
-        sim_config : DFMIObject
-            The simulation configuration object containing noise parameters like
-            `f_n`, `amp_n`, `df_n`, etc.
-        time_axis : numpy.ndarray
-            The time vector for the simulation. Its length determines the number
-            of samples to generate.
+        main_label : str
+            The label of the DFMIObject in `self.sims` to use for the main channel.
+        n_seconds : float
+            The duration of the simulation in seconds.
+        mode : {'asd', 'snr'}, optional
+            The simulation mode to use: 'asd' for detailed noise models, or 'snr'
+            for a simple signal-to-noise ratio based simulation. Defaults to 'asd'.
+        witness_label : str, optional
+            The label of the DFMIObject in `self.sims` to use for the witness
+            channel. If provided, a second, linked channel is generated.
+        snr_db : float, optional
+            The target Signal-to-Noise Ratio in dB. Required if mode='snr'.
         trial_num : int, optional
-            A number used to seed the random noise generators, ensuring
-            reproducible but different noise for each trial. Defaults to 0.
-
-        Returns
-        -------
-        dict
-            A dictionary where keys are noise source names (e.g., 'laser_frequency',
-            'amplitude') and values are the corresponding numpy arrays of the
-            generated noise time series.
+            A number used to seed the random noise generators.
         """
-        num_samples = len(time_axis)
-        fs = sim_config.f_samp
-        noise_params = {
-            'laser_frequency': {'asd': sim_config.f_n, 'alpha': 2.0},
-            'amplitude': {'asd': sim_config.amp_n, 'alpha': 0.0}, # alpha=0 for white noise
-            'df': {'asd': sim_config.df_n, 'alpha': 0.0}, # alpha=0 for white noise
-            'armlength': {'asd': sim_config.arml_mod_n, 'alpha': 2.0}
-        }
-        basis_noises = {}
-        final_noise = {}
-        
-        # Use a single seed counter to ensure all generators are unique per trial
-        seed_counter = 1 + trial_num * len(noise_params)
-
-        # Create a single RandomState generator for all numpy-based noise
-        rng = np.random.RandomState(seed=seed_counter)
-        seed_counter += 1
-
-        for name, params in noise_params.items():
-            asd = params['asd']
-            if asd == 0.0:
-                final_noise[name] = 0.0
-                continue
-
-            if name in ['amplitude', 'df']:
-                # Calculate required standard deviation for the time series
-                # sigma = ASD * sqrt(sampling_rate / 2)
-                sigma = asd * np.sqrt(fs / 2.0)
-                final_noise[name] = rng.normal(scale=sigma, size=num_samples)
-                # Skip to the next noise source
-                continue
-
-            alpha_val = params['alpha']
-            # Generate basis noise if not already created for this color
-            if alpha_val not in basis_noises and params['asd'] != 0:
-                generator = pyplnoise.AlphaNoise(fs, fs / num_samples, fs / 2, 
-                                                alpha=alpha_val, seed=seed_counter)
-                basis_noises[alpha_val] = generator.get_series(num_samples)
-                seed_counter += 1
-            
-            # Scale the basis noise by the specified ASD
-            if alpha_val in basis_noises:
-                final_noise[name] = asd / np.sqrt(2) * basis_noises[alpha_val]
-            else:
-                final_noise[name] = 0.0
-
-        return final_noise
-    
-    def _run_asd_static_simulation(self, sim_config, time_axis, noise_arrays):
-        """
-        Core physics engine for static simulation with detailed noise ASDs.
-
-        This version includes support for adding second-harmonic distortion to the
-        frequency modulation, controlled by parameters in the sim_config object.
-        """
-        # --- 1. Unpack parameters ---
-        A = sim_config.amp
-        C = sim_config.visibility
-        tau_r = sim_config.ref_arml / sc.c
-        tau_m = sim_config.meas_arml / sc.c
-        omega_mod = 2 * np.pi * sim_config.f_mod
-
-        # --- 2. Calculate noisy modulation depth ---
-        df_noisy = sim_config.df + noise_arrays['df']
-        m_noisy = 2 * np.pi * df_noisy * (tau_m - tau_r)
-
-        # --- 3. Calculate total phase with optional distortion ---
-        # Base phase modulation from the fundamental harmonic
-        phase_mod = m_noisy * np.cos(omega_mod * time_axis + sim_config.psi)
-
-        # Add second harmonic distortion if specified
-        if sim_config.df_2nd_harmonic_frac != 0:
-            # Amplitude of the 2nd harmonic phase modulation is m2 = m * ε / 2
-            m2_noisy = m_noisy * sim_config.df_2nd_harmonic_frac / 2.0
-            phase_mod += m2_noisy * np.cos(2 * omega_mod * time_axis + sim_config.psi + sim_config.df_2nd_harmonic_phase)
-
-        phitot = sim_config.phi + phase_mod
-        # Add laser frequency noise contribution
-        phitot += 2 * np.pi * noise_arrays['laser_frequency'] * (tau_m - tau_r)
-
-        # --- 4. Calculate final signal ---
-        return A + noise_arrays['amplitude'] + A * C * np.cos(phitot)
-
-    def _run_asd_dynamic_simulation(self, sim_config, time_axis, noise_arrays, create_ref_channel):
-        """
-        Core physics engine for dynamic simulation with detailed noise ASDs.
-
-        This version includes support for adding second-harmonic distortion to the
-        frequency modulation, controlled by parameters in the sim_config object.
-        """
-        # --- 1. Pre-calculate common noisy terms ---
-        omega_0_noisy = 2 * np.pi * (sc.c / sim_config.wavelength + noise_arrays['laser_frequency'])
-        omega_mod = 2 * np.pi * sim_config.f_mod
-        df_noisy = sim_config.df + noise_arrays['df']
-        
-        # --- 2. Calculate Main Channel Signal ---
-        tau_r = sim_config.ref_arml / sc.c
-        tau_m = sim_config.meas_arml / sc.c
-        
-        tau_dl = (0.5 * sim_config.arml_mod_amp * np.sin(2 * np.pi * sim_config.arml_mod_f * time_axis + sim_config.arml_mod_psi)
-                  + noise_arrays['armlength'] + sim_config.phi * sim_config.wavelength / (2 * np.pi)) / sc.c
-        
-        # Calculate phase modulation from the fundamental harmonic
-        sin_term_meas = np.sin(omega_mod * (time_axis - tau_m - tau_dl) + sim_config.psi)
-        sin_term_ref = np.sin(omega_mod * (time_axis - tau_r) + sim_config.psi)
-        phi_mod = (df_noisy / sim_config.f_mod) * (sin_term_meas - sin_term_ref)
-
-        # Add second harmonic distortion if specified
-        if sim_config.df_2nd_harmonic_frac != 0:
-            eps = sim_config.df_2nd_harmonic_frac
-            theta_eps = sim_config.df_2nd_harmonic_phase
-            
-            # The phase modulation from the 2nd harmonic component
-            sin_term_meas_2nd = np.sin(2 * omega_mod * (time_axis - tau_m - tau_dl) + sim_config.psi + theta_eps)
-            sin_term_ref_2nd = np.sin(2 * omega_mod * (time_axis - tau_r) + sim_config.psi + theta_eps)
-            
-            # Note the extra factor of 2 in the denominator from the integration
-            phi_mod += (df_noisy * eps / (2 * sim_config.f_mod)) * (sin_term_meas_2nd - sin_term_ref_2nd)
-
-        phi_static = omega_0_noisy * (tau_m - tau_r + tau_dl)
-        phitot_main = phi_static + phi_mod
-        
-        y_main = sim_config.amp + noise_arrays['amplitude'] + sim_config.amp * sim_config.visibility * np.cos(phitot_main)
-        
-        # --- 3. Calculate Reference Channel Signal (if requested) ---
-        y_ref = None 
-        if create_ref_channel:
-            ref_opd_factor = sim_config.refifo_opd_factor
-            tau_r_ref = tau_r * ref_opd_factor
-            tau_m_ref = tau_m * ref_opd_factor
-            
-            sin_term_meas_ref = np.sin(omega_mod * (time_axis - tau_m_ref) + sim_config.psi)
-            sin_term_ref_ref = np.sin(omega_mod * (time_axis - tau_r_ref) + sim_config.psi)
-            phi_mod_ref = (df_noisy / sim_config.f_mod) * (sin_term_meas_ref - sin_term_ref_ref)
-
-            if sim_config.df_2nd_harmonic_frac != 0:
-                eps = sim_config.df_2nd_harmonic_frac
-                theta_eps = sim_config.df_2nd_harmonic_phase
-                sin_term_meas_ref_2nd = np.sin(2 * omega_mod * (time_axis - tau_m_ref) + sim_config.psi + theta_eps)
-                sin_term_ref_ref_2nd = np.sin(2 * omega_mod * (time_axis - tau_r_ref) + sim_config.psi + theta_eps)
-                phi_mod_ref += (df_noisy * eps / (2 * sim_config.f_mod)) * (sin_term_meas_ref_2nd - sin_term_ref_ref_2nd)
-
-            phi_static_ref = omega_0_noisy * (tau_m_ref - tau_r_ref)
-            phitot_ref = phi_static_ref + phi_mod_ref
-            y_ref = sim_config.amp + noise_arrays['amplitude'] + sim_config.amp * sim_config.visibility * np.cos(phitot_ref)
-
-        phi_s_ground_truth = 2 * np.pi * (sc.c / sim_config.wavelength) * (tau_m - tau_r + tau_dl)
-
-        return y_main, y_ref, phitot_main, phi_s_ground_truth
-    
-    def _vectorized_downsample(self, signal, R):
-        """
-        Vectorized downsampling function using NumPy's reshape and mean.
-        
-        Parameters
-        ----------
-        signal : numpy.ndarray
-            The 1D signal array to be downsampled.
-        R : int
-            The downsampling factor (i.e., the buffer size).
-
-        Returns
-        -------
-        numpy.ndarray
-            The downsampled signal.
-        """
-        if R == 0: return np.array([])
-        # Trim the signal so its length is a multiple of R
-        trimmed_len = (len(signal) // R) * R
-        if trimmed_len == 0: return np.array([])
-        
-        trimmed_signal = signal[:trimmed_len]
-        # Reshape into a 2D array and take the mean along the new axis
-        return trimmed_signal.reshape(-1, R).mean(axis=1)
-
-    def simulate_with_asd(self, label, n_seconds, simulate="dynamic", ref_channel=False, trial_num=0):
-        """
-        Generates a signal using the detailed physics-based noise ASDs.
-        This is the advanced simulation path that models multiple physical noise sources.
-        """
-        # --- 1. Setup Simulation Configuration and Time Axis ---
-        if label not in self.sims:
-            logging.error(f"Invalid simulation label: '{label}' !!"); return
-            
-        sim_config = self.sims[label]
-        num_samples = int(n_seconds * sim_config.f_samp)
-        time_axis = np.arange(num_samples) / sim_config.f_samp
-        sim_config.N = len(time_axis)
-
-        # logging.info(f"Simulating '{label}' ({simulate}) with ASDs for {n_seconds:.2f}s...")
         t0 = time.time()
         
-        # --- 2. Generate Noise and Run Physics Engine ---
-        noise = self._generate_noise_arrays(sim_config, time_axis, trial_num)
-        
-        y_ref, phitot, phi_s = None, None, None
-        
-        if simulate == "dynamic":
-             # Call the dynamic physics engine, explicitly passing the ref_channel flag
-             y_main, y_ref, phitot, phi_s = self._run_asd_dynamic_simulation(
-                 sim_config, time_axis, noise, create_ref_channel=ref_channel
-             )
-        else: # static
-             y_main = self._run_asd_static_simulation(sim_config, time_axis, noise)
+        # --- 1. Validate configurations ---
+        if main_label not in self.sims:
+            logging.error(f"Main simulation label '{main_label}' not found!"); return
+        main_config = self.sims[main_label]
 
-        sim_config.simtime = time.time() - t0
-        # logging.info(f"ASD-based simulation finished in {sim_config.simtime:.3f} s.")
-
-        # --- 3. Create and Populate the Main Channel's Raw Data Object ---
-        raw_main = DeepRawObject(data=pd.DataFrame(y_main, columns=["ch0"]))
-        raw_main.label = label
-        raw_main.f_samp = sim_config.f_samp
-        raw_main.f_mod = sim_config.f_mod
-        raw_main.t0 = 0 
-        raw_main.sim = sim_config
-        # Store ground-truth signals for detailed analysis
-        raw_main.phi = phitot
-        raw_main.phi_sim = phi_s
-        if phi_s is not None:
-            # This call now correctly uses the class method
-            raw_main.phi_sim_downsamp = self._vectorized_downsample(phi_s, sim_config.R)
-        
-        raw_main.f_noise = noise['laser_frequency']
-        raw_main.a_noise = noise['amplitude']
-        raw_main.l_noise = noise['armlength']
-        raw_main.df_noise = noise['df']
-        
-        self.raws[label] = raw_main
-
-        # --- 4. Create and Populate the Reference Channel Object (if requested and created) ---
-        if ref_channel and y_ref is not None:
-            ref_label = label + '_ref'
-            raw_ref = DeepRawObject(data=pd.DataFrame(y_ref, columns=["ch0"]))
-            
-            # Populate all necessary metadata
-            raw_ref.label = ref_label
-            raw_ref.f_samp = sim_config.f_samp
-            raw_ref.f_mod = sim_config.f_mod
-            raw_ref.t0 = 0
-            
-            # Create a new, distinct simulation configuration for the reference channel
-            # to store its unique arm lengths and 'm' value.
-            ref_sim_config = copy.deepcopy(sim_config)
-            ref_sim_config.label = ref_label
-            ref_sim_config.ref_arml *= sim_config.refifo_opd_factor
-            ref_sim_config.meas_arml *= sim_config.refifo_opd_factor
-            ref_sim_config.m = 2 * np.pi * ref_sim_config.df * (ref_sim_config.meas_arml - ref_sim_config.ref_arml) / sc.c
-            
-            self.sims[ref_label] = ref_sim_config
-            raw_ref.sim = ref_sim_config
-            
-            # Store common noise signals for potential cross-correlation analysis
-            raw_ref.f_noise = noise['laser_frequency']
-            raw_ref.a_noise = noise['amplitude']
-            
-            self.raws[ref_label] = raw_ref
-
-    def simulate(self, label, n_seconds, snr_db=None, simulate="dynamic", ref_channel=False, trial_num=0):
-        """
-        Main entry point for simulations. Acts as a router.
-
-        If `snr_db` is provided, it runs a simplified simulation with white noise.
-        Otherwise, it runs the full, detailed simulation using the noise ASDs
-        defined in the DFMIObject configuration.
-        """
-        if snr_db is not None:
-            # Call the new, simple SNR-based method
-            return self.simulate_with_snr(label, n_seconds, snr_db, trial_num=trial_num)
+        witness_config = None
+        if witness_label:
+            if witness_label not in self.sims:
+                logging.error(f"Witness simulation label '{witness_label}' not found!"); return
+            witness_config = self.sims[witness_label]
+            logging.info(f"Simulating '{main_label}' with witness '{witness_label}' for {n_seconds:.2f}s...")
         else:
-            # Call the original, complex ASD-based method
-            # We need to adapt the function signature slightly to match
-            # For simplicity, I'll call a placeholder here.
-            # You would call your original simulate logic (which I've renamed to simulate_with_asd)
-            return self.simulate_with_asd(label, n_seconds=n_seconds, simulate=simulate, ref_channel=ref_channel, trial_num=trial_num)
+            logging.info(f"Simulating '{main_label}' for {n_seconds:.2f}s...")
+
+        # --- 2. Instantiate and run the physics engine ---
+        generator = SignalGenerator()
+        generated_channels = generator.generate(
+            main_config=main_config,
+            n_seconds=n_seconds,
+            mode=mode,
+            trial_num=trial_num,
+            witness_config=witness_config,
+            snr_db=snr_db
+        )
+
+        # --- 3. Store the results in the framework ---
+        if not generated_channels:
+            logging.error("Simulation failed to generate data.")
+            return
+
+        for _, raw_obj in generated_channels.items():
+            self.raws[raw_obj.label] = raw_obj
+            
+        sim_time = time.time() - t0
+        main_config.simtime = sim_time
+        logging.info(f"Simulation finished in {sim_time:.3f} s.")
 
     def load_sim(self, sim):
         self.sims[sim.label] = sim
@@ -938,10 +629,10 @@ class DeepFitFramework():
 
         R, fs, nbuf = self.fit_init(label, n)
         if nbuf == 0: logging.error('Check buffer size !!'); return
-            
-        if verbose:
-            # (Your logging info block here)
-            pass
+
+        raw_obj = self.raws[label]
+        if hasattr(raw_obj, 'phi_sim') and raw_obj.phi_sim is not None and len(raw_obj.phi_sim) > 0:
+            raw_obj.phi_sim_downsamp = vectorized_downsample(raw_obj.phi_sim, R)
 
         if init_psi:
             psi = self.psi_init(label, init_psi, init_a, init_m, R, ndata, fit_label, verbose)
@@ -982,6 +673,10 @@ class DeepFitFramework():
             
         R, fs, nbuf = self.fit_init(label, n)
         if nbuf == 0: logging.error('Check buffer size !!'); return
+
+        raw_obj = self.raws[label]
+        if hasattr(raw_obj, 'phi_sim') and raw_obj.phi_sim is not None and len(raw_obj.phi_sim) > 0:
+            raw_obj.phi_sim_downsamp = vectorized_downsample(raw_obj.phi_sim, R)
             
         if n_cores is None:
             n_cores = os.cpu_count()
@@ -989,7 +684,6 @@ class DeepFitFramework():
 
         if verbose:
             logging.info(f"Processing in parallel with {n_cores} cores...")
-            # (Your logging info block here)
             pass
 
         # 1. Seeding: Get a single good initial guess by fitting the first buffer
@@ -1182,6 +876,277 @@ class DeepFitFramework():
             logging.error('Check buffer size !!')
 
         return R, fs, nbuf
+
+    def fit_wdfmi(self, main_label, witness_label, n=None, fit_label=None, ndata=10, init_a=1.6, init_m=6.0, init_phi=0.0, init_psi=0.0, verbose=True):
+        """
+        Performs a fit using the Witnessed DFMI (W-DFMI) numerical method.
+
+        This method uses a witness channel to construct a high-fidelity numerical
+        model of the modulation waveform, rendering the fit robust against
+        modulation non-linearity. It fits each buffer of the main channel's raw
+        data using this numerical model within a Levenberg-Marquardt routine.
+
+        Parameters
+        ----------
+        main_label : str
+            The label of the primary DeepRawObject containing the main DFMI signal.
+        witness_label : str
+            The label of the DeepRawObject containing the witness signal.
+        n : int, optional
+            The number of modulation periods per fit buffer (`n_fit`).
+            If None, it's inferred from the simulation object.
+        fit_label : str, optional
+            The label for the output DeepFitObject. Defaults to `main_label + '_wdfmi'`.
+        ndata : int, optional
+            The number of harmonics to include in the fit. Defaults to 10.
+        init_a : float, optional
+            Initial guess for the amplitude (C).
+        init_m : float, optional
+            Initial guess for the modulation depth (m).
+        init_phi : float, optional
+            Initial guess for the interferometric phase (Phi).
+        init_psi : float, optional
+            Initial guess for the modulation phase (psi).
+        verbose : bool, optional
+            If True, display a progress bar.
+
+        Returns
+        -------
+        DeepFitObject
+            A fit object containing the time-series of the estimated parameters.
+        """
+        # --- 1. Input Validation and Initialization ---
+        if main_label not in self.raws or witness_label not in self.raws:
+            logging.error("Invalid main or witness label provided!"); return
+        if fit_label is None:
+            fit_label = main_label + '_wdfmi'
+        if n is None:
+            try: n = self.sims[main_label].fit_n
+            except KeyError: logging.error("fit_n not specified!!"); return
+
+        R, fs, nbuf = self.fit_init(main_label, n)
+        if nbuf == 0: logging.error('Check buffer size !!'); return
+        
+        main_raw = self.raws[main_label]
+        w0 = 2. * np.pi * main_raw.f_mod / main_raw.f_samp
+        
+        # --- 2. Process Witness Signal to get Basis Waveform g(t) ---
+        # We assume the witness signal in the first buffer is representative
+        witness_buffer_raw = np.array(self.raws[witness_label].data.loc[0:R-1]).flatten()
+        # Remove DC offset to get AC component
+        v_w_ac = witness_buffer_raw - np.mean(witness_buffer_raw)
+        # Integrate to get phase waveform, then normalize
+        time_axis_buffer = np.arange(R) / main_raw.f_samp
+        witness_phase_unnorm = cumulative_trapezoid(v_w_ac, time_axis_buffer, initial=0)
+        g_t = witness_phase_unnorm / np.max(np.abs(witness_phase_unnorm))
+
+        # --- 3. Main Fitting Loop ---
+        current_guess = np.array([init_a, init_m, init_phi, init_psi])
+        results_list = []
+        
+        iterable = range(nbuf)
+        if verbose:
+            logging.info(f"Processing '{main_label}' with W-DFMI readout...")
+            iterable = tqdm(iterable)
+
+        for b in iterable:
+            # Get measured quadratures for the current buffer of the main signal
+            buf_range = range(b * R, (b + 1) * R)
+            main_buffer_raw = np.array(main_raw.data.loc[buf_range]).flatten()
+            
+            QI_data_meas = np.zeros(2 * ndata)
+            for i in range(ndata):
+                n_harm = i + 1
+                # Using a simplified quadrature calculation for clarity
+                Q_meas = (2/R) * np.sum(main_buffer_raw * np.cos(n_harm * w0 * np.arange(R)))
+                I_meas = (2/R) * np.sum(main_buffer_raw * np.sin(n_harm * w0 * np.arange(R)))
+                QI_data_meas[i] = Q_meas
+                QI_data_meas[i + ndata] = I_meas
+
+            # Define the residual function for the optimizer
+            def _wdfmi_residuals(params, g_t, w0_hz, ndata, QI_meas):
+                C, m, phi, psi = params
+                
+                # Construct time-domain model signal using witness waveform
+                t_shift = psi / (2 * np.pi * w0_hz)
+                t_interp = time_axis_buffer - t_shift
+                g_shifted = np.interp(t_interp, time_axis_buffer, g_t, period=time_axis_buffer[-1])
+                
+                v_model = C * np.cos(phi + m * g_shifted)
+                
+                # Calculate model quadratures
+                QI_model = np.zeros(2 * ndata)
+                for i in range(ndata):
+                    n_harm = i + 1
+                    QI_model[i] = (2/R) * np.sum(v_model * np.cos(n_harm * w0 * np.arange(R)))
+                    QI_model[i + ndata] = (2/R) * np.sum(v_model * np.sin(n_harm * w0 * np.arange(R)))
+                
+                return QI_model - QI_meas
+
+            # Run the non-linear least squares optimization
+            opt_result = least_squares(
+                _wdfmi_residuals,
+                current_guess,
+                args=(g_t, main_raw.f_mod, ndata, QI_data_meas),
+                method='lm'
+            )
+            
+            # Store results and update guess for warm start
+            fit_parm = opt_result.x
+            current_guess = fit_parm # Warm start
+            
+            fit_ssq = np.sum(opt_result.fun**2)
+            fitok = 1 if opt_result.success else 0
+            
+            results_list.append({
+                'amp': fit_parm[0], 'm': fit_parm[1], 'phi': fit_parm[2],
+                'psi': fit_parm[3], 'dc': np.mean(main_buffer_raw),
+                'ssq': fit_ssq, 'fitok': fitok, 'b': b
+            })
+            
+        # --- 4. Create and return a standard DeepFitObject ---
+        self.fits_df[fit_label] = pd.DataFrame(results_list)
+        return self._create_fit_object_from_df(fit_label, main_label, n, R, fs, nbuf, ndata, init_a, init_m)
+    
+    def new_wdfmi_setup(self, main_label, witness_label, m_witness=0.1):
+        """
+        Creates a complete Measurement and Witness channel configuration for W-DFMI.
+
+        This helper function simplifies the process of setting up a W-DFMI
+        simulation. It creates a single shared LaserConfig and two distinct
+        InterferometerConfigs, one for the main channel and one for the witness.
+        It automatically adjusts the witness arm lengths to achieve a desired
+        small modulation depth.
+
+        Parameters
+        ----------
+        main_label : str
+            The label for the main measurement channel.
+        witness_label : str
+            The label for the witness channel.
+        m_witness : float, optional
+            The target modulation depth for the witness interferometer. This should
+            be small (<< 1) for the witness to act as a linear frequency-to-
+            amplitude converter.
+
+        Returns
+        -------
+        tuple
+            A tuple containing the main channel config and the witness channel config.
+        """
+        # 1. Create the single, shared laser source
+        laser = LaserConfig(label=f"{main_label}_laser")
+        self.lasers[laser.label] = laser
+
+        # 2. Create the main interferometer config
+        main_ifo_config = InterferometerConfig(label=f"{main_label}_ifo")
+        self.ifos[main_ifo_config.label] = main_ifo_config # Assuming dff.ifos dict
+
+        # 3. Create the witness interferometer config
+        witness_ifo_config = InterferometerConfig(label=f"{witness_label}_ifo")
+        # Make it static
+        witness_ifo_config.arml_mod_amp = 0.0
+        # Artificially set arm lengths to achieve the desired witness `m`
+        delta_l_witness = (m_witness * sc.c) / (2 * np.pi * laser.df)
+        witness_ifo_config.ref_arml = 0.01 # Arbitrary small base length
+        witness_ifo_config.meas_arml = witness_ifo_config.ref_arml + delta_l_witness
+        self.ifos[witness_ifo_config.label] = witness_ifo_config
+        
+        # 4. Create the two simulation channel objects
+        main_channel = DFMIObject(main_label, laser, main_ifo_config)
+        witness_channel = DFMIObject(witness_label, laser, witness_ifo_config)
+        
+        # Store them in the framework's main dictionary
+        self.sims[main_label] = main_channel
+        self.sims[witness_label] = witness_channel
+        
+        logging.info(f"Created W-DFMI setup: '{main_label}' (m={main_channel.m:.2f}) and '{witness_label}' (m={witness_channel.m:.2f})")
+        return main_channel, witness_channel
+    
+    def create_witness_channel(self, main_channel_label, witness_channel_label, delta_l_witness=None, m_witness=None):
+        """
+        Creates a witness channel configuration based on an existing main channel.
+
+        This helper function simplifies the creation of a static witness channel
+        that is physically linked to a main channel (i.e., it shares the same
+        laser source). It automatically handles the creation of the necessary
+        configuration objects and sets the witness arm lengths to achieve a
+        desired optical path difference or modulation depth.
+
+        The user must specify *either* `delta_l_witness` or `m_witness`, but not
+        both. If neither is specified, it defaults to creating a witness with
+        `m_witness = 0.1`, suitable for W-DFMI.
+
+        Parameters
+        ----------
+        main_channel_label : str
+            The label of the existing DFMIObject in `self.sims` to use as a template.
+        witness_channel_label : str
+            The label for the new witness channel to be created.
+        delta_l_witness : float, optional
+            The desired absolute optical path difference (meas_arml - ref_arml)
+            for the witness interferometer, in meters.
+        m_witness : float, optional
+            The desired effective modulation index for the witness interferometer.
+
+        Returns
+        -------
+        DFMIObject
+            The newly created witness channel object, which has also been added
+            to the framework's `sims` dictionary.
+
+        Raises
+        ------
+        KeyError
+            If `main_channel_label` does not exist in `self.sims`.
+        ValueError
+            If both `delta_l_witness` and `m_witness` are specified.
+        """
+        # --- 1. Validate Inputs ---
+        if main_channel_label not in self.sims:
+            raise KeyError(f"Main channel '{main_channel_label}' not found in framework.")
+        if delta_l_witness is not None and m_witness is not None:
+            raise ValueError("Please specify either delta_l_witness or m_witness, but not both.")
+        # Default behavior if neither is specified
+        if delta_l_witness is None and m_witness is None:
+            m_witness = 0.1
+            logging.info(f"Neither delta_l nor m specified for witness. Defaulting to m_witness = {m_witness}.")
+
+        # --- 2. Get Shared Laser and Template Channel ---
+        main_channel = self.sims[main_channel_label]
+        shared_laser = main_channel.laser
+
+        # --- 3. Create and Configure New Interferometer for the Witness ---
+        witness_ifo = InterferometerConfig(label=f"{witness_channel_label}_ifo")
+        witness_ifo.arml_mod_amp = 0.0  # Witness is always static
+        witness_ifo.arml_mod_n = 0.0
+
+        # --- 4. Calculate and Set Witness Arm Lengths ---
+        if m_witness is not None:
+            # Calculate the required OPD to achieve the target 'm'
+            if shared_laser.df == 0:
+                raise ValueError("Cannot set 'm' for witness when laser 'df' is zero.")
+            delta_l = (m_witness * sc.c) / (2 * np.pi * shared_laser.df)
+        else: # delta_l_witness must have been specified
+            delta_l = delta_l_witness
+
+        # Set arm lengths based on the calculated OPD
+        witness_ifo.ref_arml = 0.01  # Arbitrary small base length
+        witness_ifo.meas_arml = witness_ifo.ref_arml + delta_l
+
+        # --- 5. Compose and Register the New Witness Channel ---
+        witness_channel = DFMIObject(
+            label=witness_channel_label,
+            laser_config=shared_laser,
+            ifo_config=witness_ifo,
+            f_samp=main_channel.f_samp  # Inherit f_samp from main channel
+        )
+        witness_channel.fit_n = main_channel.fit_n # Inherit fit_n
+
+        self.sims[witness_channel_label] = witness_channel
+
+        logging.info(f"Created witness channel '{witness_channel_label}' linked to laser '{shared_laser.label}'.")
+        return witness_channel
 
     def calc_lpsd(self, labels=None):
         """Calculate the LPSD of the interferometric phase parameter (phi) 

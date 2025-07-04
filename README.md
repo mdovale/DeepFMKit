@@ -41,35 +41,59 @@ It is designed to handle the entire experimental workflow, from simulating compl
 The following example demonstrates the primary workflow: creating a simulation, generating data, running a fit, and plotting the results.
 
 ```python
-from DeepFMKit.core import DeepFitFramework
+import DeepFMKit.core as dfm
 import matplotlib.pyplot as plt
+import numpy as np
+import scipy.constants as sc
 
-dff = DeepFitFramework()
+# Instantiate the main framework
+dff = dfm.DeepFitFramework()
 
-# Create a `DeepSimObject` describing an interferometer
-label = "dynamic"
-dff.new_sim(label)
-dff.sims[label].m = 6.0 # Effective modulation index
-dff.sims[label].f_mod = 1000 # Modulation frequency
-dff.sims[label].f_samp = int(200e3) # Sampling frequency in Hz
-dff.sims[label].f_n = 1e6 # Frequency noise ASD
-dff.sims[label].arml_mod_f = 1.0 # Frequency of the dynamic armlength
-dff.sims[label].arml_mod_amp = 1e-9 # Motion of the dynamic armlength
-dff.sims[label].arml_mod_n = 1e-12 # Noise on the dynamic armlength
-dff.sims[label].fit_n = 10 # Number of harmonics to fit
-dff.sims[label].amp_n = 1e-2 # Amplitude noise
+# --- 1. Define the Single, Shared Laser Source ---
+laser_config = dfm.LaserConfig(label="main_laser")
+laser_config.f_mod = 1000 # Modulation frequency (Hz)
+laser_config.f_n = 1e6 # Laser frequency noise at 1 Hz (Hz/rtHz)
+laser_config.amp_n = 1e-5 # Laser amplitude noise (1/rtHz)
 
-# Simulate DFM interferometer with test mass motion and a reference channel
-dff.simulate(label, n_seconds=10, simulate="dynamic", ref_channel=True)
+# --- 2. Define the Main Interferometer ---
+main_ifo_config = dfm.InterferometerConfig(label="dynamic_ifo")
+main_ifo_config.ref_arml = 0.1 # Reference arm length (m)
+main_ifo_config.meas_arml = 0.3 # Measurement arm length (m)
+main_ifo_config.arml_mod_f = 1.0 # Measurement arm modulation frequency (Hz)
+main_ifo_config.arml_mod_amp = 1e-9 # Armlength modulation amplitude (m)
+main_ifo_config.arml_mod_n = 1e-12 # Armlength modulation amplitude noise (m/rtHz)
 
-# Print system information
-dff.sims[label].info()
+# --- 3. Set Modulation Depth by Adjusting Laser's `df` ---
+m_target = 6.0 # Target effective modulation index (rad)
+opd = main_ifo_config.meas_arml - main_ifo_config.ref_arml # Optical pathlength difference (m)
+df_required = (m_target * sc.c) / (2 * np.pi * opd) # Required laser modulation amplitude (Hz)
+laser_config.df = df_required
 
-# Perform non-linear least squares fitting on data
-for i, key in enumerate(dff.sims):
-    dff.fit(label=key, fit_label=f'ch{i}')
+# --- 4. Compose the Main Channel ---
+main_label = "dynamic_channel"
+main_channel = dfm.DFMIObject(
+    label=main_label,
+    laser_config=laser_config,
+    ifo_config=main_ifo_config,
+    f_samp=int(200e3) # Sampling frequency (Hz)
+)
+dff.sims[main_label] = main_channel
 
-# Plot results
+# --- 6. Simulate ---
+dff.simulate(
+    main_label=main_label,
+    n_seconds=10 # Simulation length in seconds
+)
+
+# --- 7. Analyze and Plot ---
+print("\n--- Configuration Summaries ---")
+dff.sims[main_label].info()
+
+print("\n--- Fitting Channels ---")
+dff.fit(label=main_label)
+
+print("\n--- Plotting Results ---")
 ax = dff.plot()
+ax[0].legend()
 plt.show()
 ```
