@@ -881,10 +881,11 @@ class DeepFitFramework():
         """
         Performs a fit using the Witnessed DFMI (W-DFMI) numerical method.
 
-        This is the definitive, corrected version. It uses a numerically stable,
-        first-order Taylor approximation for the signal model. The basis function
-        for the fit is correctly identified as the sign-corrected and normalized
-        AC voltage from the witness channel.
+        This is the definitive, physically correct version. It uses the exact
+        physical model for the interferometric phase difference, `phi(t-tau) - phi(t)`.
+        It correctly identifies the witness signal as a measure of the frequency
+        modulation, integrates it to get the phase modulation, and fits for the
+        physical time delay `tau` to ensure numerical stability.
 
         Parameters
         ----------
@@ -919,28 +920,33 @@ class DeepFitFramework():
         if nbuf == 0: logging.error('Check buffer size !!'); return
         
         main_raw = self.raws[main_label]
-        f_mod = main_raw.sim.laser.f_mod
-        omega_mod = 2 * np.pi * f_mod
+        laser_cfg = main_raw.sim.laser
+        main_ifo_cfg = main_raw.sim.ifo
+        omega_mod = 2 * np.pi * laser_cfg.f_mod
         w0_samp = omega_mod / main_raw.f_samp
         
-        # --- 2. Process Witness Signal to get Correct Basis Waveform g(t) ---
+        # --- 2. Process Witness Signal to get Phase Modulation Waveform phi_mod(t) ---
         witness_buffer_raw = np.array(self.raws[witness_label].data.loc[0:R-1]).flatten()
         v_w_ac = witness_buffer_raw - np.mean(witness_buffer_raw)
-        time_axis_buffer = np.arange(R) / main_raw.f_samp
         
-        # --- THE CRUCIAL FIX ---
-        # The witness at phi=pi/2 produces a signal proportional to -sin(m*g(t)),
-        # which is approx -m*g(t). We must invert this to get the true g(t).
-        g_t_basis = -v_w_ac / np.max(np.abs(v_w_ac))
-        # -----------------------
+        # The witness voltage is proportional to -f_mod(t). First, get the normalized f_mod(t) basis.
+        f_mod_basis = -v_w_ac / np.max(np.abs(v_w_ac))
+        
+        # Now, integrate the frequency basis to get the phase modulation basis.
+        time_axis_buffer = np.arange(R) / main_raw.f_samp
+        dt = time_axis_buffer[1] - time_axis_buffer[0]
+        phi_mod_basis = np.cumsum(f_mod_basis) * dt
 
         # --- 3. Main Fitting Loop ---
-        current_guess = np.array([init_a, init_m, init_phi, init_psi])
+        delta_l = main_ifo_cfg.meas_arml - main_ifo_cfg.ref_arml
+        tau_init = delta_l / sc.c
+        current_guess = np.array([init_a, tau_init, init_phi, init_psi])
+        
         results_list = []
         
         iterable = range(nbuf)
         if verbose:
-            logging.info(f"Processing '{main_label}' with definitive W-DFMI readout...")
+            logging.info(f"Processing '{main_label}' with definitive Exact Model W-DFMI readout...")
             iterable = tqdm(iterable)
 
         for b in iterable:
@@ -953,15 +959,25 @@ class DeepFitFramework():
                 QI_data_meas[i] = (2/R) * np.sum(main_buffer_raw * np.cos(n_harm * w0_samp * np.arange(R)))
                 QI_data_meas[i + ndata] = (2/R) * np.sum(main_buffer_raw * np.sin(n_harm * w0_samp * np.arange(R)))
 
-            def _wdfmi_residuals(params, g_t_arg, QI_meas):
-                C, m, phi, psi = params
+            def _wdfmi_residuals(params, phi_mod_basis_arg, laser_cfg_arg, QI_meas):
+                C, tau, phi, psi = params
                 
-                t_shift = -psi / omega_mod
-                t_interp = time_axis_buffer - t_shift
-                g_shifted = np.interp(t_interp, time_axis_buffer, g_t_arg, period=time_axis_buffer[-1])
+                # The full, unscaled phase modulation waveform
+                phi_mod_unscaled = 2 * np.pi * laser_cfg_arg.df * phi_mod_basis_arg
                 
-                # Use the stable, first-order physical model
-                v_model = C * np.cos(phi - m * g_shifted)
+                # Apply psi as a time shift to this phase waveform
+                t_shift_psi = -psi / omega_mod
+                t_interp_psi = time_axis_buffer - t_shift_psi
+                phi_mod_shifted = np.interp(t_interp_psi, time_axis_buffer, phi_mod_unscaled, period=time_axis_buffer[-1])
+                
+                # Apply tau delay to the psi-shifted waveform
+                t_interp_tau = time_axis_buffer - tau
+                phi_mod_delayed = np.interp(t_interp_tau, time_axis_buffer, phi_mod_shifted, period=time_axis_buffer[-1])
+                
+                # The final model phase is the difference of the delayed and local phase waveforms
+                delta_phi_mod = phi_mod_delayed - phi_mod_shifted
+                
+                v_model = C * np.cos(phi + delta_phi_mod)
                 
                 QI_model = np.zeros(2 * ndata)
                 for i in range(ndata):
@@ -974,16 +990,20 @@ class DeepFitFramework():
             opt_result = least_squares(
                 _wdfmi_residuals,
                 current_guess,
-                args=(g_t_basis, QI_data_meas),
+                args=(phi_mod_basis, laser_cfg, QI_data_meas),
                 method='lm'
             )
             
             fit_parm = opt_result.x
+            C_fit, tau_fit, phi_fit, psi_fit = fit_parm
+            
+            m_fit = 2 * np.pi * laser_cfg.df * tau_fit
+            
             current_guess = fit_parm
             
             results_list.append({
-                'amp': fit_parm[0], 'm': fit_parm[1], 'phi': fit_parm[2],
-                'psi': fit_parm[3], 'dc': np.mean(main_buffer_raw),
+                'amp': C_fit, 'm': m_fit, 'phi': phi_fit, 'psi': psi_fit, 
+                'dc': np.mean(main_buffer_raw),
                 'ssq': np.sum(opt_result.fun**2), 'fitok': 1 if opt_result.success else 0, 'b': b
             })
             
