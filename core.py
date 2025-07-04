@@ -920,6 +920,8 @@ class DeepFitFramework():
             logging.error("Invalid main or witness label provided!"); return
         if fit_label is None:
             fit_label = main_label + '_wdfmi'
+        
+        # Use the main channel's sim object to determine n if not provided
         if n is None:
             try: n = self.sims[main_label].fit_n
             except KeyError: logging.error("fit_n not specified!!"); return
@@ -931,14 +933,14 @@ class DeepFitFramework():
         w0 = 2. * np.pi * main_raw.f_mod / main_raw.f_samp
         
         # --- 2. Process Witness Signal to get Basis Waveform g(t) ---
-        # We assume the witness signal in the first buffer is representative
+        # The witness signal AC component is directly proportional to the phase.
+        # We DO NOT integrate it.
         witness_buffer_raw = np.array(self.raws[witness_label].data.loc[0:R-1]).flatten()
-        # Remove DC offset to get AC component
         v_w_ac = witness_buffer_raw - np.mean(witness_buffer_raw)
-        # Integrate to get phase waveform, then normalize
+        
+        # The basis waveform is simply the normalized AC voltage.
+        g_t = v_w_ac / np.max(np.abs(v_w_ac))
         time_axis_buffer = np.arange(R) / main_raw.f_samp
-        witness_phase_unnorm = cumulative_trapezoid(v_w_ac, time_axis_buffer, initial=0)
-        g_t = witness_phase_unnorm / np.max(np.abs(witness_phase_unnorm))
 
         # --- 3. Main Fitting Loop ---
         current_guess = np.array([init_a, init_m, init_phi, init_psi])
@@ -950,31 +952,29 @@ class DeepFitFramework():
             iterable = tqdm(iterable)
 
         for b in iterable:
-            # Get measured quadratures for the current buffer of the main signal
             buf_range = range(b * R, (b + 1) * R)
             main_buffer_raw = np.array(main_raw.data.loc[buf_range]).flatten()
             
             QI_data_meas = np.zeros(2 * ndata)
             for i in range(ndata):
                 n_harm = i + 1
-                # Using a simplified quadrature calculation for clarity
-                Q_meas = (2/R) * np.sum(main_buffer_raw * np.cos(n_harm * w0 * np.arange(R)))
-                I_meas = (2/R) * np.sum(main_buffer_raw * np.sin(n_harm * w0 * np.arange(R)))
-                QI_data_meas[i] = Q_meas
-                QI_data_meas[i + ndata] = I_meas
+                QI_data_meas[i] = (2/R) * np.sum(main_buffer_raw * np.cos(n_harm * w0 * np.arange(R)))
+                QI_data_meas[i + ndata] = (2/R) * np.sum(main_buffer_raw * np.sin(n_harm * w0 * np.arange(R)))
 
-            # Define the residual function for the optimizer
-            def _wdfmi_residuals(params, g_t, w0_hz, ndata, QI_meas):
+            def _wdfmi_residuals(params, g_t_basis, omega_m, ndata, QI_meas):
                 C, m, phi, psi = params
                 
-                # Construct time-domain model signal using witness waveform
-                t_shift = psi / (2 * np.pi * w0_hz)
+                # A phase shift of +psi in cos(omega*t + psi) corresponds to a
+                # time shift of -psi/omega.
+                t_shift = -psi / omega_m
+                # Create the time axis for interpolation
                 t_interp = time_axis_buffer - t_shift
-                g_shifted = np.interp(t_interp, time_axis_buffer, g_t, period=time_axis_buffer[-1])
+                # Interpolate the basis waveform g(t) to apply the phase shift,
+                # using periodic boundary conditions.
+                g_shifted = np.interp(t_interp, time_axis_buffer, g_t_basis, period=time_axis_buffer[-1])
                 
                 v_model = C * np.cos(phi + m * g_shifted)
                 
-                # Calculate model quadratures
                 QI_model = np.zeros(2 * ndata)
                 for i in range(ndata):
                     n_harm = i + 1
@@ -983,7 +983,6 @@ class DeepFitFramework():
                 
                 return QI_model - QI_meas
 
-            # Run the non-linear least squares optimization
             opt_result = least_squares(
                 _wdfmi_residuals,
                 current_guess,
@@ -991,20 +990,15 @@ class DeepFitFramework():
                 method='lm'
             )
             
-            # Store results and update guess for warm start
             fit_parm = opt_result.x
-            current_guess = fit_parm # Warm start
-            
-            fit_ssq = np.sum(opt_result.fun**2)
-            fitok = 1 if opt_result.success else 0
+            current_guess = fit_parm
             
             results_list.append({
                 'amp': fit_parm[0], 'm': fit_parm[1], 'phi': fit_parm[2],
                 'psi': fit_parm[3], 'dc': np.mean(main_buffer_raw),
-                'ssq': fit_ssq, 'fitok': fitok, 'b': b
+                'ssq': np.sum(opt_result.fun**2), 'fitok': 1 if opt_result.success else 0, 'b': b
             })
             
-        # --- 4. Create and return a standard DeepFitObject ---
         self.fits_df[fit_label] = pd.DataFrame(results_list)
         return self._create_fit_object_from_df(fit_label, main_label, n, R, fs, nbuf, ndata, init_a, init_m)
     
