@@ -397,16 +397,13 @@ class SignalGenerator:
 
     def _run_simulation_physics(self, sim_config, time_axis, noise_arrays, is_dynamic=True):
         """
-        Core physics engine for a single channel using the exact physical model.
+        Core physics engine for a single channel using the EXACT physical model.
 
-        This function calculates the final time-series voltage of a DFMI signal
-        by combining the laser properties, interferometer path information, and
-        various stochastic noise sources. It uses the exact physical model for
-        the phase modulation (`phi_mod(t-tau) - phi_mod(t)`) to ensure high fidelity.
-
-        It also calculates and returns the "ground truth" interferometric phase,
-        `phi_sim`, which represents the ideal phase evolution from physical path
-        length changes, excluding laser frequency noise and the DFMI modulation itself.
+        This function calculates the final time-series voltage of a DFMI signal.
+        It uses the exact physical model for the phase modulation by integrating the
+        true frequency waveform and then calculating the phase difference
+        `phi_mod(t-tau) - phi_mod(t)`. This ensures high fidelity, especially
+        for large modulation depths.
 
         Parameters
         ----------
@@ -417,50 +414,39 @@ class SignalGenerator:
         noise_arrays : dict
             A dictionary containing the pre-generated time series for each noise source.
         is_dynamic : bool, optional
-            If True, includes dynamic arm length modulation and noise. If False,
-            simulates a static interferometer. Defaults to True.
+            If True, includes dynamic arm length modulation and noise.
 
         Returns
         -------
         y_final : numpy.ndarray
             The final simulated voltage time series.
         phitot_final : numpy.ndarray
-            The total phase inside the final cosine term, including all noise
-            and modulation effects.
+            The total phase inside the final cosine term.
         phi_sim_ground_truth : numpy.ndarray
             The ground truth interferometric phase from path length changes only.
         """
-        # --- 1. Unpack Configuration Objects ---
+        # --- 1. Unpack Configuration and Construct True Frequency Waveform ---
         laser = sim_config.laser
         ifo = sim_config.ifo
-
-        # --- 2. Construct the True Phase Modulation Waveform, `phi_mod(t)` ---
         omega_mod = 2 * np.pi * laser.f_mod
-        
-        # Start with the fundamental frequency component
-        base_waveform = np.cos(omega_mod * time_axis + laser.psi)
-        
-        # Add distortion if specified
+
+        # Construct the normalized, unitless frequency modulation waveform g(t)
+        g_t = np.cos(omega_mod * time_axis + laser.psi)
         if laser.df_2nd_harmonic_frac != 0:
             eps = laser.df_2nd_harmonic_frac
             theta_eps = laser.df_2nd_harmonic_phase
-            base_waveform += eps * np.cos(2 * omega_mod * time_axis + laser.psi + theta_eps)
-
-        # Normalize the entire frequency waveform so its peak amplitude is 1.0.
-        # This ensures the 'df' parameter truly represents the peak frequency deviation.
-        g_t_normalized = base_waveform / np.max(np.abs(base_waveform))
+            g_t += eps * np.cos(2 * omega_mod * time_axis + laser.psi + theta_eps)
+        g_t_normalized = g_t / np.max(np.abs(g_t))
         
-        # The true phase modulation is the integral of the true frequency modulation.
-        # phi_mod(t) = integral(2*pi*f_mod(t))dt = integral(2*pi*df*g(t))dt
-        dt = time_axis[1] - time_axis[0]
-        # We add the df noise to the base df value before integration
+        # --- 2. Construct True Phase Modulation Waveform phi_mod(t) ---
+        # Integrate the true frequency waveform to get the phase waveform
         df_noisy = laser.df + noise_arrays.get('df', 0.0)
+        dt = time_axis[1] - time_axis[0]
         phi_mod_waveform = 2 * np.pi * df_noisy * np.cumsum(g_t_normalized) * dt
         
-        # --- 3. Calculate Time-Varying Path Length and Delays ---
+        # --- 3. Calculate Delays and Path Lengths ---
         tau_r = ifo.ref_arml / sc.c
         tau_m = ifo.meas_arml / sc.c
-        
         if not is_dynamic:
             path_length_change = ifo.phi * laser.wavelength / (2 * np.pi)
         else:
@@ -469,32 +455,26 @@ class SignalGenerator:
                                 + ifo.phi * laser.wavelength / (2 * np.pi))
         tau_dl = path_length_change / sc.c
 
-        # --- 4. Calculate Final Interferometric Phase using the Exact Model ---
-        # Interpolate the phase modulation waveform at the delayed times
+        # --- 4. Calculate Final Phase using the EXACT Model ---
         t_interp_meas = time_axis - tau_m - tau_dl
         t_interp_ref = time_axis - tau_r
         
+        # Interpolate the full phase modulation waveform at delayed times
         phi_mod_meas = np.interp(t_interp_meas, time_axis, phi_mod_waveform)
         phi_mod_ref = np.interp(t_interp_ref, time_axis, phi_mod_waveform)
-        
-        # The exact DFMI modulation phase term
         delta_phi_mod = phi_mod_meas - phi_mod_ref
         
-        # The static and drift-induced phase term
+        # Add the carrier phase term, including frequency noise
         omega_0_noisy = 2 * np.pi * (sc.c / laser.wavelength + noise_arrays.get('laser_frequency', 0.0))
-        delta_phi_static_and_drift = omega_0_noisy * (tau_m - tau_r + tau_dl)
+        delta_phi_carrier = omega_0_noisy * (tau_m - tau_r + tau_dl)
 
-        # Combine all phase components
-        phitot_final = delta_phi_static_and_drift + delta_phi_mod
-
-        # --- 5. Generate Final Voltage Signal and Ground Truth Phase ---
+        phitot_final = delta_phi_carrier + delta_phi_mod
+        
+        # --- 5. Generate Final Signal and Ground Truth ---
         y_final = laser.amp + noise_arrays.get('amplitude', 0.0) + laser.amp * laser.visibility * np.cos(phitot_final)
         
-        # The ground truth phase uses the clean carrier frequency and excludes DFMI modulation
         omega_0_clean = 2 * np.pi * sc.c / laser.wavelength
         phi_sim_ground_truth = omega_0_clean * (tau_m - tau_r + tau_dl)
-        
-        # Ensure ground truth is always an array
         if np.isscalar(phi_sim_ground_truth):
             phi_sim_ground_truth = np.full_like(time_axis, phi_sim_ground_truth, dtype=float)
 
