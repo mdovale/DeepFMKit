@@ -316,138 +316,216 @@ def calculate_bias_for_m_vs_mwitness(params):
     """
     Worker function to calculate W-DFMI bias for a single (m_main, m_witness) point.
 
-    This function simulates a non-distorted DFMI signal and fits it with the
-    W-DFMI algorithm to isolate residual biases caused by the interaction
-    between the main and witness channel configurations.
-    """
-    m_main = params['m_main']
-    m_witness = params['m_witness']
-    witness_phi = params['witness_phi']
-    grid_i = params['grid_i']
-    grid_j = params['grid_j']
-    
-    dff = dfm.DeepFitFramework()
-    
-    laser_config = dfm.LaserConfig()
-    main_ifo_config = dfm.InterferometerConfig()
-    
-    # No distortion for this test
-    laser_config.df_2nd_harmonic_frac = 0.0
-    
-    main_label = "main"
-    main_channel = dfm.DFMIObject(main_label, laser_config, main_ifo_config)
-    
-    opd_main = main_ifo_config.meas_arml - main_ifo_config.ref_arml
-    if opd_main == 0: return (grid_i, grid_j, 0)
-    laser_config.df = (m_main * dfm.sc.c) / (2 * np.pi * opd_main)
-    dff.sims[main_label] = main_channel
+    This function simulates a non-distorted DFMI signal and fits it with a
+    specified W-DFMI algorithm. It is designed to respect the physical
+    constraints of the W-DFMI method by ensuring the witness interferometer's
+    modulation depth (m_witness) is held constant, even as the laser's
+    modulation amplitude (df) changes to achieve the target m_main.
 
-    witness_label = "witness"
-    # Create the witness but disable auto-tuning to respect the m_witness value
-    witness_channel = dff.create_witness_channel(
-        main_channel_label=main_label,
-        witness_channel_label=witness_label,
-        m_witness=m_witness
-    )
-    # Set the desired witness phase
-    if witness_phi is not None:
-        witness_channel.ifo.phi = witness_phi
-    
-    n_seconds = main_channel.fit_n / laser_config.f_mod
-    dff.simulate(main_label, n_seconds=n_seconds, witness_label=witness_label)
-    
-    # Use enough harmonics to avoid truncation error
-    ndata = int(m_main + 10)
-    
-    # fit_obj_wdfmi = dff.fit_wdfmi_orthogonal_demodulation(main_label, witness_label, fit_label="wdfmi_fit", verbose=False)
-    fit_obj_wdfmi = dff.fit_wdfmi_sequential(main_label, witness_label, fit_label="wdfmi_fit", verbose=False)
-    
-    bias = 0
-    if fit_obj_wdfmi and fit_obj_wdfmi.m.size > 0:
-        bias = fit_obj_wdfmi.m[0] - m_main
-        
-    return (grid_i, grid_j, bias)
-
-def compare_fitter_stability(params):
-    """
-    Worker function to compare the stability of the simultaneous NLS and the
-    sequential bootstrap W-DFMI fitters for a single (m, epsilon) point.
-
-    This function runs a full Monte Carlo simulation over two random variables:
-    1. The phase of the 2nd harmonic distortion.
-    2. The static phase of the witness interferometer.
-
-    It computes and returns the mean and worst-case bias for both fitting
-    algorithms, providing the data needed for a direct comparison.
+    The key logic is:
+    1. Determine the required laser df for the target m_main.
+    2. Design the witness interferometer's physical path length (delta_l) to
+       achieve the target m_witness with that specific df.
+    3. Analytically lock the witness interferometer to its quadrature point.
+    4. Simulate the system and perform the fit.
 
     Parameters
     ----------
     params : dict
-        A dictionary containing all parameters for this single grid point.
+        A dictionary containing all parameters for the simulation point:
+        - 'm_main': The target modulation depth for the main channel.
+        - 'm_witness': The target modulation depth for the witness channel.
+        - 'fitter_func_name': The string name of the fitting function to use
+                              (e.g., 'fit_wdfmi_orthogonal_demodulation').
+        - 'grid_i', 'grid_j': Indices for placing the result in the output grid.
 
     Returns
     -------
     tuple
-        A tuple containing (grid_i, grid_j, mean_unstable, worst_unstable,
-        mean_sequential, worst_sequential) for reconstructing the result grids.
+        A tuple (grid_i, grid_j, bias) with the calculated bias value.
     """
+    # I've set this up to be completely self-contained for parallel processing.
+    import DeepFMKit.core as dfm
+    import numpy as np
+
     # Unpack parameters
-    m_main = params['m_main']
-    epsilon = params['epsilon']
-    n_phase_trials = params['n_phase_trials']
-    m_witness = params['m_witness']
+    m_main_target = params['m_main']
+    m_witness_target = params['m_witness']
+    fitter_func_name = params['fitter_func_name']
     grid_i = params['grid_i']
     grid_j = params['grid_j']
 
-    unstable_biases = []
-    sequential_biases = []
-    
-    ndata = int(m_main + 10)
+    dff = dfm.DeepFitFramework()
 
-    for _ in range(n_phase_trials):
+    # --- 1. Configure the shared laser and main interferometer ---
+    laser_config = dfm.LaserConfig()
+    main_ifo_config = dfm.InterferometerConfig(label="main_ifo")
+    
+    # Ensure there is no signal distortion for this intrinsic bias test
+    laser_config.df_2nd_harmonic_frac = 0.0
+    
+    # Calculate the required laser modulation amplitude (df) to achieve the
+    # target m_main with the fixed main interferometer path length.
+    opd_main = main_ifo_config.meas_arml - main_ifo_config.ref_arml
+    if opd_main == 0: return (grid_i, grid_j, 0)
+    laser_config.df = (m_main_target * dfm.sc.c) / (2 * np.pi * opd_main)
+    
+    main_label = "main"
+    main_channel = dfm.DFMIObject(main_label, laser_config, main_ifo_config)
+    dff.sims[main_label] = main_channel
+
+    # --- 2. Design the Witness Interferometer to meet the Golden Rule ---
+    # The witness modulation depth (m_witness) must be maintained at its target
+    # value. To do this, I must adjust its physical path difference (OPD)
+    # to compensate for the changing laser df.
+    witness_label = "witness"
+    
+    # Calculate the required physical path difference for the witness
+    opd_witness = (m_witness_target * dfm.sc.c) / (2 * np.pi * laser_config.df)
+
+    # Now, create a new IFO config with this specific OPD
+    witness_ifo_config = dfm.InterferometerConfig(label="witness_ifo")
+    witness_ifo_config.ref_arml = 0.01  # A small, non-zero base armlength
+    witness_ifo_config.meas_arml = witness_ifo_config.ref_arml + opd_witness
+
+    # With the physical structure defined, I can now perform the analytical fringe lock.
+    # This sets witness_ifo_config.phi to place the IFO at quadrature.
+    f0 = dfm.sc.c / laser_config.wavelength
+    static_fringe_phase = (2 * np.pi * f0 * opd_witness) / dfm.sc.c
+    witness_ifo_config.phi = (np.pi / 2.0) - static_fringe_phase
+
+    # Finally, compose the witness DFMIObject
+    witness_channel = dfm.DFMIObject(witness_label, laser_config, witness_ifo_config, f_samp=main_channel.f_samp)
+    dff.sims[witness_label] = witness_channel
+
+    # --- 3. Simulate and Fit ---
+    n_seconds = main_channel.fit_n / laser_config.f_mod
+    dff.simulate(main_label, n_seconds=n_seconds, witness_label=witness_label, mode='asd')
+    
+    # Retrieve the specified fitter function from the framework object
+    try:
+        fitter_function = getattr(dff, fitter_func_name)
+    except AttributeError:
+        # Handle case where the function name is invalid
+        return (grid_i, grid_j, np.nan) 
+
+    # Execute the chosen fitter
+    fit_obj = fitter_function(main_label, witness_label, fit_label="wdfmi_fit", verbose=False)
+    
+    bias = np.nan
+    if fit_obj and fit_obj.m.size > 0:
+        # The true value is m_main_target
+        bias = fit_obj.m[0] - m_main_target
+        
+    return (grid_i, grid_j, bias)
+
+def calculate_bias_for_m_vs_mwitness_stochastic(params):
+    """
+    Worker function for a stochastic analysis of W-DFMI bias.
+
+    For a single (m_main, m_witness) grid point, this function runs a
+    Monte Carlo simulation over multiple trials. In each trial, the witness
+    interferometer's phase is perturbed by a random amount from its ideal
+    quadrature point. This simulates an imperfectly locked witness and tests
+    the robustness of the fitting algorithm.
+
+    It returns the mean and worst-case (max absolute) bias over all trials.
+
+    Parameters
+    ----------
+    params : dict
+        A dictionary containing all parameters for the simulation point:
+        - 'm_main', 'm_witness': Target modulation depths.
+        - 'fitter_func_name': String name of the fitting function to use.
+        - 'n_trials': Number of Monte Carlo trials to run.
+        - 'witness_phi_uncertainty_rad': Half-width of the uniform random
+          distribution for the phase error (in radians).
+        - 'grid_i', 'grid_j': Indices for the output grid.
+
+    Returns
+    -------
+    tuple
+        A tuple (grid_i, grid_j, mean_bias, worst_case_bias).
+    """
+    # I've designed this to be self-contained for robust parallel execution.
+    import DeepFMKit.core as dfm
+    import numpy as np
+
+    # Unpack parameters from the input dictionary
+    m_main_target = params['m_main']
+    m_witness_target = params['m_witness']
+    fitter_func_name = params['fitter_func_name']
+    n_trials = params['n_trials']
+    witness_phi_uncertainty_rad = params['witness_phi_uncertainty_rad']
+    grid_i = params['grid_i']
+    grid_j = params['grid_j']
+    force_witness_phase = params['force_witness_phase']
+
+    biases_for_this_point = []
+
+    # --- Monte Carlo Loop ---
+    for _ in range(n_trials):
         dff = dfm.DeepFitFramework()
-        
+
+        # 1. Configure laser and main IFO
         laser_config = dfm.LaserConfig()
-        main_ifo_config = dfm.InterferometerConfig()
-        
-        laser_config.df_2nd_harmonic_frac = epsilon
-        laser_config.df_2nd_harmonic_phase = np.random.uniform(0, 2 * np.pi)
+        main_ifo_config = dfm.InterferometerConfig(label="main_ifo")
+        laser_config.df_2nd_harmonic_frac = 0.0 # No distortion
+
+        opd_main = main_ifo_config.meas_arml - main_ifo_config.ref_arml
+        if opd_main == 0: continue
+        laser_config.df = (m_main_target * dfm.sc.c) / (2 * np.pi * opd_main)
         
         main_label = "main"
         main_channel = dfm.DFMIObject(main_label, laser_config, main_ifo_config)
-        
-        opd_main = main_ifo_config.meas_arml - main_ifo_config.ref_arml
-        if opd_main == 0: continue
-        laser_config.df = (m_main * dfm.sc.c) / (2 * np.pi * opd_main)
         dff.sims[main_label] = main_channel
 
+        # 2. Design Witness IFO with Stochastic Phase
         witness_label = "witness"
-        witness_channel = dff.create_witness_channel(
-            main_channel_label=main_label,
-            witness_channel_label=witness_label,
-            m_witness=m_witness
-        )
-        witness_channel.ifo.phi = np.random.uniform(-0.5e-3, 0.5e-3)
+        opd_witness = (m_witness_target * dfm.sc.c) / (2 * np.pi * laser_config.df)
+
+        witness_ifo_config = dfm.InterferometerConfig(label="witness_ifo")
+        witness_ifo_config.ref_arml = 0.01
+        witness_ifo_config.meas_arml = witness_ifo_config.ref_arml + opd_witness
+
+        # Calculate the ideal quadrature point
+        f0 = dfm.sc.c / laser_config.wavelength
+        static_fringe_phase = (2 * np.pi * f0 * opd_witness) / dfm.sc.c
+        ideal_phi_offset = (np.pi / 2.0) - static_fringe_phase
         
+        # Add a random error to simulate imperfect fringe locking
+        lock_error = np.random.uniform(-witness_phi_uncertainty_rad, witness_phi_uncertainty_rad)
+        witness_ifo_config.phi = ideal_phi_offset + lock_error
+
+        if force_witness_phase is not None: witness_ifo_config.phi = force_witness_phase
+
+        witness_channel = dfm.DFMIObject(witness_label, laser_config, witness_ifo_config, f_samp=main_channel.f_samp)
+        dff.sims[witness_label] = witness_channel
+
+        # 3. Simulate and Fit for this single trial
         n_seconds = main_channel.fit_n / laser_config.f_mod
-        dff.simulate(main_label, n_seconds=n_seconds, witness_label=witness_label)
+        dff.simulate(main_label, n_seconds=n_seconds, witness_label=witness_label, mode='asd')
         
-        # Fit with the old, unstable fitter
-        fit_obj_unstable = dff.fit_wdfmi(main_label, witness_label, fit_label="unstable_fit", ndata=ndata, verbose=False)
-        if fit_obj_unstable and fit_obj_unstable.m.size > 0:
-            unstable_biases.append(fit_obj_unstable.m[0] - m_main)
+        try:
+            fitter_function = getattr(dff, fitter_func_name)
+        except AttributeError:
+            biases_for_this_point.append(np.nan)
+            continue
 
-        # Fit with the new, robust sequential fitter
-        fit_obj_seq = dff.fit_wdfmi_sequential(main_label, witness_label, fit_label="sequential_fit", verbose=False)
-        if fit_obj_seq and fit_obj_seq.m.size > 0:
-            sequential_biases.append(fit_obj_seq.m[0] - m_main)
+        fit_obj = fitter_function(main_label, witness_label, fit_label="wdfmi_fit", verbose=False)
+        
+        if fit_obj and fit_obj.m.size > 0:
+            bias = fit_obj.m[0] - m_main_target
+            biases_for_this_point.append(bias)
+        else:
+            biases_for_this_point.append(np.nan)
 
-    unstable_biases_arr = np.array(unstable_biases) if unstable_biases else np.array([0])
-    sequential_biases_arr = np.array(sequential_biases) if sequential_biases else np.array([0])
-    
-    mean_unstable = np.mean(unstable_biases_arr)
-    worst_unstable = np.max(np.abs(unstable_biases_arr))
-    mean_sequential = np.mean(sequential_biases_arr)
-    worst_sequential = np.max(np.abs(sequential_biases_arr))
-    
-    return (grid_i, grid_j, mean_unstable, worst_unstable, mean_sequential, worst_sequential)
+    # --- 4. Calculate Summary Statistics ---
+    if not biases_for_this_point: # Handle case where all trials failed
+        return (grid_i, grid_j, np.nan, np.nan)
+        
+    biases_arr = np.array(biases_for_this_point)
+    mean_bias = np.nanmean(biases_arr)
+    worst_case_bias = np.nanmax(np.abs(biases_arr))
+
+    return (grid_i, grid_j, mean_bias, worst_case_bias)

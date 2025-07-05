@@ -222,7 +222,7 @@ class SignalGenerator:
         raw_obj = DeepRawObject(data=pd.DataFrame(y_noisy, columns=["ch0"]))
         raw_obj.label = main_config.label
         raw_obj.f_samp = main_config.f_samp
-        raw_obj.f_mod = main_config.f_mod
+        raw_obj.f_mod = main_config.laser.f_mod
         raw_obj.t0 = 0
         raw_obj.sim = main_config
         
