@@ -19,7 +19,7 @@ class LaserConfig:
     label : str, optional
         An identifier for this laser configuration.
     """
-    def __init__(self, label="laser_source"):
+    def __init__(self, label="laser_source", psi=None):
         self.label = label
         
         # --- Core Optical Properties ---
@@ -30,7 +30,7 @@ class LaserConfig:
         # --- Modulation Properties ---
         self.f_mod = 1000
         self.df = 3e9
-        self.psi = 0.0
+        self.psi = psi if psi else 0.0
         
         # --- Noise Properties ---
         self.f_n = 0.0      # Frequency noise ASD (Hz/sqrt(Hz) @ 1 Hz)
