@@ -120,39 +120,7 @@ class DeepFitFramework():
         if self.fit_file is not None:
             self.load_fit(labels=fit_labels)
 
-    def change_raw_labels(self, old_labels, new_labels):
-        assert len(old_labels) == len(new_labels)
-
-        for i, label in enumerate(old_labels):
-            assert label in self.raws
-            self.raws[new_labels[i]] = self.raws.pop(label)
-
-    def change_fit_labels(self, old_labels, new_labels):
-        assert len(old_labels) == len(new_labels)
-
-        for i, label in enumerate(old_labels):
-            assert label in self.fits
-            self.fits[new_labels[i]] = self.fits.pop(label)
-
-    def append_raw_labels(self, string):
-        assert type(string) == str
-        old_labels = list(self.raws.keys())
-        new_labels = ['']*len(old_labels)
-        for i, item in enumerate(old_labels):
-            new_labels[i] = item + string
-        dmap = {o:n for (o,n) in zip(old_labels, new_labels)}
-        self.raws = dict((dmap[key], value) for (key, value) in self.raws.items())
-
-    def append_fit_labels(self, string):
-        assert type(string) == str
-        old_labels = list(self.fits.keys())
-        new_labels = ['']*len(old_labels)
-        for i, item in enumerate(old_labels):
-            new_labels[i] = item + string
-        dmap = {o:n for (o,n) in zip(old_labels, new_labels)}
-        self.fits = dict((dmap[key], value) for (key, value) in self.fits.items())
-
-    def fits_to_txt(self, filepath='./', labels=None):
+    def to_txt(self, filepath='./', labels=None):
         if labels is not None:
             for label in labels:
                 filename = filepath + label + '.txt'
@@ -167,10 +135,8 @@ class DeepFitFramework():
 
         This function must be revised should the format of the header change.
         """
-
         lines = []
         values = []
-        res = {}    
 
         if file_select == 'raw':
             with open(self.raw_file) as f:
