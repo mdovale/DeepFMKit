@@ -228,7 +228,7 @@ class EKFFitter(BaseFitter):
         R_downsample, fs, nbuf = _calculate_fit_params(main_raw, self.config['n'])
 
         results = np.zeros((nbuf, dim_x))
-        logging.info(f"Running EKF for {n_samp} samples...")
+        logging.debug(f"Running EKF for {n_samp} samples...")
         
         # --- 2. Main EKF Loop ---
         for k in tqdm(range(n_samp), desc="EKF Progress"):
@@ -268,7 +268,7 @@ class EKFFitter(BaseFitter):
                     results[buf_idx, :] = x
 
         # --- 3. Create and return results DataFrame ---
-        logging.info("EKF processing finished. Packaging results...")
+        logging.debug("EKF processing finished. Packaging results...")
         
         df_dict = {
             'amp': results[:, 0], 'm': results[:, 1], 'phi': results[:, 2],
@@ -323,7 +323,7 @@ class StandardNLSFitter(BaseFitter):
         if n_cores is None: n_cores = os.cpu_count()
         n_cores = min(n_cores, nbuf)
 
-        logging.info(f"Processing '{main_raw.label}' with StandardNLSFitter using {n_cores} cores...")
+        logging.debug(f"Processing '{main_raw.label}' with StandardNLSFitter using {n_cores} cores...")
 
         # --- 1. Seeding: Get a single good initial guess ---
         if init_psi_method:
@@ -385,7 +385,7 @@ class StandardNLSFitter(BaseFitter):
 
     def _psi_init(self, main_raw, method, init_a, init_m, R, ndata):
         """Finds an optimal initial guess for the modulation phase (psi)."""
-        logging.info(f"Initializing psi parameter using '{method}' method...")
+        logging.debug(f"Initializing psi parameter using '{method}' method...")
 
         try_psi_args = (main_raw, init_a, init_m, R, ndata)
 
@@ -406,7 +406,7 @@ class StandardNLSFitter(BaseFitter):
         else:
             final_psi = 0.0
             
-        logging.info(f"Selected init_psi = {final_psi:.4f}")
+        logging.debug(f"Selected init_psi = {final_psi:.4f}")
         return final_psi
 
     def _try_psi(self, psi, main_raw, init_a, init_m, R, ndata):
@@ -450,7 +450,7 @@ class WDFMI_NLSFitter(BaseFitter):
         current_guess = np.array([init_a, tau_init, init_phi, init_psi])
         
         results_list = []
-        logging.info(f"Processing '{main_raw.label}' with WDFMI_NLSFitter...")
+        logging.debug(f"Processing '{main_raw.label}' with WDFMI_NLSFitter...")
         
         for b in tqdm(range(nbuf), desc="WDFMI NLS Fit"):
             buf_range = range(b * R, (b + 1) * R)
@@ -535,7 +535,7 @@ class WDFMI_OrthogonalFitter(BaseFitter):
         current_guess = np.array([tau_init, init_psi])
 
         results_list = []
-        logging.info(f"Processing '{main_raw.label}' with WDFMI_OrthogonalFitter...")
+        logging.debug(f"Processing '{main_raw.label}' with WDFMI_OrthogonalFitter...")
 
         for b in tqdm(range(nbuf), desc="WDFMI Ortho Fit"):
             buf_range = range(b * R, (b + 1) * R)
@@ -629,7 +629,7 @@ class WDFMI_SequentialFitter(BaseFitter):
 
         # --- 3. Main Fitting Loop ---
         results_list = []
-        logging.info(f"Processing '{main_raw.label}' with WDFMI_SequentialFitter...")
+        logging.debug(f"Processing '{main_raw.label}' with WDFMI_SequentialFitter...")
         
         for b in tqdm(range(nbuf), desc="WDFMI Seq Fit"):
             buf_range = range(b * R, (b + 1) * R)
