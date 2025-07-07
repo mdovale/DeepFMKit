@@ -82,7 +82,7 @@ def run_efficiency_trial(params):
     )
     
     # Fit the buffer using the standard NLS fitter
-    fit_obj = dff_worker.fit(label, ndata=ndata, init_m=m_true, verbose=False, parallel=False)
+    fit_obj = dff_worker.fit(label, method='nls', ndata=ndata, init_m=m_true, verbose=False, parallel=False)
     
     return fit_obj.m[0] if fit_obj and fit_obj.m.size > 0 else np.nan
 
