@@ -497,7 +497,7 @@ class DeepFitFramework():
             logging.error(f"Unknown fit method: '{method}'. Available: {list(fitter_map.keys())}"); return
 
         FitterClass = fitter_map[method]
-        logging.info(f"Dispatching to {FitterClass.__name__} for label '{main_label}'.")
+        logging.debug(f"Dispatching to {FitterClass.__name__} for label '{main_label}'.")
 
         # --- 2. Prepare Data and Config ---
         if main_label not in self.raws:
