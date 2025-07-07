@@ -3,6 +3,7 @@ from .fit import *
 from .data import *
 from .physics import *
 from .dsp import *
+from .fitters import *
 
 import numpy as np
 import scipy.constants as sc
@@ -428,14 +429,15 @@ class DeepFitFramework():
             fit.label = labels[k]
             self.fits[labels[k]] = fit
     
-    def fit_ekf(self, label, fit_label=None, init_a=1.6, init_m=6.0, init_phi=0.0, init_psi=0.0, 
+    def fit_ekf(self, label, fit_label=None, n=None, init_a=1.6, init_m=6.0, init_phi=0.0, init_psi=0.0, 
                 P0_diag=None, Q_diag=None, R_val=None):
         """
         Performs state estimation using an Extended Kalman Filter (EKF).
 
-        This method processes the raw data sequentially, sample by sample, to
-        provide a time-varying estimate of the interferometer's state. It is
-        particularly useful for tracking dynamic changes.
+        This method now acts as a high-level controller. I've refactored the
+        core logic into the dedicated EKFFitter class in my `fitters.py` module.
+        This method instantiates the fitter and uses it to process the data,
+        keeping the main framework clean and modular.
 
         Parameters
         ----------
@@ -443,22 +445,18 @@ class DeepFitFramework():
             The label of the DeepRawObject containing the raw data to process.
         fit_label : str, optional
             The label for the output DeepFitObject. If None, defaults to `label + '_ekf'`.
+        n : int, optional
+            Number of modulation cycles to average for the output data rate.
+            If None, I infer it from the simulation settings.
         init_a, init_m, init_phi, init_psi : float, optional
             Initial guesses for the state parameters.
         P0_diag : list or np.ndarray, optional
-            A 5-element list specifying the initial variances for the diagonal
-            of the state covariance matrix `P`. Represents the initial uncertainty
-            of the state guess. Defaults to `[1, 1, 1, 1, 1]`.
+            A 5-element list for the initial state covariance diagonal.
         Q_diag : list or np.ndarray, optional
-            A 5-element list specifying the process noise variances for the
-            state vector `[a, m, phi, psi, dc]`. This is a critical tuning
-            parameter that determines how quickly the filter adapts to changes.
-            Defaults to `[1e-8, 1e-8, 1e-6, 1e-6, 1e-8]`.
+            A 5-element list for the process noise covariance diagonal.
         R_val : float, optional
-            The measurement noise variance. Represents the variance of the
-            electronic noise on a single voltage sample. If None, it is
-            estimated from the raw data. Defaults to None.
-        
+            The measurement noise variance.
+
         Returns
         -------
         DeepFitObject
@@ -468,106 +466,49 @@ class DeepFitFramework():
             fit_label = label + '_ekf'
         if label not in self.raws:
             logging.error(f"Invalid raw data label: '{label}' !!"); return
-
-        raw_obj = self.raws[label]
-        data = raw_obj.data["ch0"].to_numpy()
         
-        # --- 1. EKF Initialization ---
-        # State vector: x = [amplitude, mod_depth, phase, mod_phase, dc_offset]
-        dim_x = 5
-        x = np.array([init_a, init_m, init_phi, init_psi, np.mean(data)])
+        # --- 1. Prepare Configuration and Data ---
+        main_raw = self.raws[label]
 
-        # Initial state covariance P0: Represents our initial uncertainty.
-        if P0_diag is None: P0_diag = [1.0, 1.0, 1.0, 1.0, 1.0]
-        P = np.diag(P0_diag)
+        # Determine 'n' for the output rate.
+        if n is None:
+            sim_obj = self.sims.get(main_raw.sim.label if main_raw.sim else label)
+            n = sim_obj.fit_n if sim_obj else 20
         
-        # Process noise Q: A key tuning parameter. How much we expect the state to change.
-        if Q_diag is None: Q_diag = [1e-8, 1e-8, 1e-6, 1e-6, 1e-8]
-        Q = np.diag(Q_diag)
-        
-        # Measurement noise R: Variance of the ADC/photodiode noise.
-        if R_val is None: R_val = np.var(data)
-        R = np.array([[R_val]]) # Must be a 1x1 matrix
+        # I've corrected the logic here. The controller must handle the default
+        # values before passing them to the fitter.
+        if P0_diag is None:
+            P0_diag = [1.0] * 5
+        if Q_diag is None:
+            Q_diag = [1e-8, 1e-8, 1e-6, 1e-6, 1e-8]
 
-        # Process model Jacobian F: For a random walk model, F is the identity matrix.
-        F = np.eye(dim_x)
-        
-        # Setup for the run
-        n_samp = len(data)
-        w_m = 2 * np.pi * raw_obj.f_mod
-        t_axis = np.arange(n_samp) / raw_obj.f_samp
-        
-        # Arrays to store the results
-        # We will downsample the results to match the NLS fitter's rate
-        n_fit_cycles = self.sims[label].fit_n if label in self.sims else 20
-        R_downsample, fs, nbuf = self.fit_init(label, n_fit_cycles)
-
-        results = np.zeros((nbuf, dim_x))
-        innovations = np.zeros(n_samp)
-
-        logging.info(f"Running EKF for {n_samp} samples...")
-        
-        # --- 2. Main EKF Loop ---
-        for k in tqdm(range(n_samp)):
-            # --- PREDICT STEP ---
-            # For a random walk model, the state prediction is just the previous state.
-            # x_priori = F @ x  (but F is identity)
-            P = F @ P @ F.T + Q
-
-            # --- UPDATE STEP ---
-            # Calculate the measurement model Jacobian (H) at the current state
-            a, m, phi, psi, dc = x
-            theta = w_m * t_axis[k] + psi
-            
-            cos_theta = np.cos(theta)
-            sin_theta = np.sin(theta)
-            full_phase_arg = phi + m * cos_theta
-            cos_full_arg = np.cos(full_phase_arg)
-            sin_full_arg = np.sin(full_phase_arg)
-
-            h_x = a * cos_full_arg + dc # The model's prediction of the measurement
-            
-            # H = [dh/da, dh/dm, dh/dphi, dh/dpsi, dh/ddc]
-            H = np.zeros((1, dim_x))
-            H[0, 0] = cos_full_arg
-            H[0, 1] = -a * sin_full_arg * cos_theta
-            H[0, 2] = -a * sin_full_arg
-            H[0, 3] = a * m * sin_full_arg * sin_theta
-            H[0, 4] = 1.0
-
-            # Calculate the innovation (residual)
-            z_k = data[k]
-            y_k = z_k - h_x
-            innovations[k] = y_k
-
-            # Calculate the Kalman Gain
-            S = H @ P @ H.T + R
-            K = (P @ H.T) @ np.linalg.inv(S)
-
-            # Update the state and covariance
-            x = x + (K @ y_k.reshape(1,1)).flatten()
-            P = (np.eye(dim_x) - K @ H) @ P
-
-            # --- Store result at the downsampled rate ---
-            if (k + 1) % R_downsample == 0:
-                buf_idx = (k + 1) // R_downsample - 1
-                if buf_idx < nbuf:
-                    results[buf_idx, :] = x
-
-        # --- 3. Create and return a standard DeepFitObject ---
-        logging.info("EKF processing finished. Creating fit object...")
-        
-        # To reuse the existing helper, we need to create a temporary DataFrame
-        df_dict = {
-            'amp': results[:, 0], 'm': results[:, 1], 'phi': results[:, 2],
-            'psi': results[:, 3], 'dc': results[:, 4],
-            'ssq': np.zeros(nbuf), # SSQ is not calculated in EKF, use innovation variance later
-            'fitok': np.ones(nbuf) # Assume fit was ok if it didn't diverge
+        # Package configurations for the fitter
+        fit_config = {'n': n}
+        init_kwargs = {
+            'init_a': init_a, 'init_m': init_m, 'init_phi': init_phi, 'init_psi': init_psi,
+            'P0_diag': P0_diag, 'Q_diag': Q_diag, 'R_val': R_val
         }
-        self.fits_df[fit_label] = pd.DataFrame(df_dict)
+
+        # --- 2. Instantiate and Run the Fitter ---
+        logging.info(f"Dispatching to EKFFitter for label '{label}'.")
+        fitter = EKFFitter(fit_config)
+        results_df = fitter.fit(main_raw, **init_kwargs)
+
+        # --- 3. Create and Store the Final DeepFitObject ---
+        if results_df.empty:
+            logging.error("EKF fitting returned no results.")
+            return None
         
-        # Use our standard object creation helper
-        return self._create_fit_object_from_df(fit_label, raw_obj.label, n_fit_cycles, R_downsample, fs, nbuf, 0, init_a, init_m)
+        self.fits_df[fit_label] = results_df
+        
+        # I'll use my standard object creation helper from the results DataFrame
+        R, fs, nbuf = self.fit_init(label, n)
+        fit_obj = self._create_fit_object_from_df(
+            fit_label, label, n, R, fs, nbuf, 0, init_a, init_m
+        )
+        self.fits[fit_label] = fit_obj
+        
+        return fit_obj
     
     def _fit_single_buffer(self, label, b, R, ndata, initial_guess):
         """
