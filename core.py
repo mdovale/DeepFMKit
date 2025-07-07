@@ -59,7 +59,7 @@ def _process_fit_chunk(args):
         # Calculate I/Q data for the buffer
         QI_data_mean = np.zeros(2 * ndata)
         for n in range(ndata):
-            Q_data, I_data = calculate_quadratures(n, buffer_data, w0, R)
+            Q_data, I_data = calculate_quadratures(n, buffer_data, w0)
             QI_data_mean[n] = Q_data.mean()
             QI_data_mean[n + ndata] = I_data.mean()
         
@@ -587,7 +587,7 @@ class DeepFitFramework():
         # 2. Calculate I/Q values
         QI_data_mean = np.zeros(2 * ndata)
         for n in range(ndata):
-            Q_data, I_data = calculate_quadratures(n, raw_buffer, w0, R)
+            Q_data, I_data = calculate_quadratures(n, raw_buffer, w0)
             QI_data_mean[n] = Q_data.mean()
             QI_data_mean[n + ndata] = I_data.mean()
         

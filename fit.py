@@ -16,7 +16,7 @@ M_GRID_STEP = 0.5
 BESSEL_AMP_THRESHOLD = 0.05
 SINCOS_AMP_THRESHOLD = 0.1
 
-def calculate_quadratures(n, data, w0, bufferSize):
+def calculate_quadratures(n, data, w0):
     """Calculate the in-phase (Q) and quadrature (I) components of a signal.
 
     This function performs digital lock-in amplification by demodulating the
@@ -33,8 +33,6 @@ def calculate_quadratures(n, data, w0, bufferSize):
     w0 : float
         The fundamental angular frequency of the modulation in units of
         radians per sample (i.e., `2 * pi * f_mod / f_samp`).
-    bufferSize : int
-        The number of samples in the `data` array.
 
     Returns
     -------
@@ -56,7 +54,7 @@ def calculate_quadratures(n, data, w0, bufferSize):
 
     # Generate the time steps for the entire buffer at once
     # t_steps is an array [0, 1, 2, ..., bufferSize-1]
-    t_steps = np.arange(bufferSize)
+    t_steps = np.arange(len(data))
 
     # Calculate the argument for the sine and cosine functions for all time steps
     # This is also a vectorized operation.
