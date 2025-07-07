@@ -13,8 +13,7 @@ def _process_fit_chunk(args):
     """
     Worker function for parallel processing. Fits a chunk of raw data buffers.
 
-    I've moved this function here from core.py to keep all fitting logic
-    together. It is a top-level function so that it can be pickled by the
+    It is a top-level function so that it can be pickled by the
     multiprocessing library. It processes its assigned chunk sequentially
     to maintain the warm-start advantage within the chunk.
 
@@ -125,10 +124,8 @@ class BaseFitter(ABC):
     """
     Abstract base class for all DFMI fitting algorithms.
 
-    I created this base class to define a common interface for all my fitters,
+    Base class to define a common interface for all fitters,
     ensuring they can be used interchangeably by the main DeepFitFramework controller.
-    This "Strategy" design pattern will make the codebase much more modular
-    and extensible for future algorithms like HW-DFMI.
     """
     def __init__(self, fit_config: dict):
         """
@@ -177,7 +174,6 @@ class EKFFitter(BaseFitter):
         """
         Processes raw data sequentially using an EKF.
 
-        I based this implementation on the time-domain EKF theory we discussed.
         It uses a random walk process model, which is a common and robust choice
         when the exact parameter dynamics are unknown.
 
@@ -584,8 +580,6 @@ class WDFMI_SequentialFitter(BaseFitter):
     """
     Fits W-DFMI data using the sequential bootstrap algorithm.
 
-    I implemented this algorithm because it is immune to the `tau-psi`
-    degeneracy and the numerical instabilities of a simultaneous 4D fit.
     It works by sequentially solving for parameters using the most robust
     method available at each stage.
     """

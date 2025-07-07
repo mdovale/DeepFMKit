@@ -49,7 +49,7 @@ import scipy.constants as sc
 # Instantiate the main framework
 dff = dfm.DeepFitFramework()
 
-# --- 1. Define the Single, Shared Laser Source ---
+# --- 1. Define the Laser Source ---
 laser_config = dfm.LaserConfig(label="main_laser")
 laser_config.f_mod = 1000 # Modulation frequency (Hz)
 

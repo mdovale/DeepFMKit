@@ -1,3 +1,5 @@
+from .experiments import *
+
 import DeepFMKit.core as dfm
 import numpy as np
 import scipy.constants as sc
@@ -39,52 +41,65 @@ def calculate_ambiguity_boundary_point(params):
     
     return (grid_i, grid_j, np.abs(coarse_phase_error))
 
-
-def run_efficiency_trial(params):
+def run_efficiency_trial(params: dict) -> float:
     """
     A self-contained worker for a single fitter efficiency trial.
-    
-    This version is corrected to ensure each trial uses a DFMIObject with a
-    unique label, preventing the "Invalid label" error during fitting.
-    """
-    # Self-contained imports
-    import DeepFMKit.core as dfm
-    import numpy as np
 
-    # Unpack all parameters from the input dictionary
-    trial_num = params['trial_num']
-    # We now pass the config objects directly
+    This worker has been refactored to use the new `experiments.run_single_trial`
+    runner. Its responsibility is now limited to configuring the physics of the
+    trial and specifying the fitter to be used. The runner handles all the
+    boilerplate of simulation and fitting.
+
+    Parameters
+    ----------
+    params : dict
+        A dictionary containing all parameters for this single trial:
+        - 'laser_config': A configured LaserConfig object.
+        - 'ifo_config': A configured InterferometerConfig object.
+        - 'n_seconds': The duration of the simulation.
+        - 'ndata': The number of harmonics for the NLS fit.
+        - 'm_true': The true modulation depth, used as an initial guess.
+        - 'trial_num': The seed for the random number generator.
+
+    Returns
+    -------
+    float
+        The fitted modulation depth `m_fit` for this trial. Returns `np.nan`
+        if the fit fails.
+    """
+    # --- 1. Unpack parameters from the input dictionary ---
     laser_config = params['laser_config']
     ifo_config = params['ifo_config']
     n_seconds = params['n_seconds']
-    snr_db = params['snr_db']
     ndata = params['ndata']
     m_true = params['m_true']
+    trial_num = params['trial_num']
     
-    # Each worker gets its own DFF instance
-    dff_worker = dfm.DeepFitFramework()
-    
-    # --- The Fix is Here ---
-    # I now create a NEW DFMIObject for each trial with a unique label.
-    # This ensures the generated raw data object has the correct label.
-    label = f"eff_trial_{trial_num}"
-    sim_config = dfm.DFMIObject(label, laser_config, ifo_config)
-    dff_worker.sims[label] = sim_config
-    # --- End of Fix ---
-    
-    # Simulate a single noisy buffer
-    dff_worker.simulate(
-        label,
+    # --- 2. Define the fitter and its specific arguments ---
+    fitter_method = 'nls'
+    fitter_kwargs = {
+        'n': int(laser_config.f_mod * n_seconds), # A single buffer fit
+        'ndata': ndata,
+        'init_m': m_true,
+        'parallel': False # Important for nested workers
+    }
+
+    # --- 3. Delegate execution to the experiment runner ---
+    # The runner handles all simulation and fitting boilerplate.
+    fit_obj = run_single_trial(
+        laser_config=laser_config,
+        main_ifo_config=ifo_config,
+        fitter_method=fitter_method,
+        fitter_kwargs=fitter_kwargs,
         n_seconds=n_seconds,
-        mode='snr',
-        snr_db=snr_db,
         trial_num=trial_num
     )
-    
-    # Fit the buffer using the standard NLS fitter
-    fit_obj = dff_worker.fit(label, method='nls', ndata=ndata, init_m=m_true, verbose=False, parallel=False)
-    
-    return fit_obj.m[0] if fit_obj and fit_obj.m.size > 0 else np.nan
+
+    # --- 4. Extract and return the single result value ---
+    if fit_obj and fit_obj.m.size > 0:
+        return fit_obj.m[0]
+    else:
+        return np.nan
 
 def calculate_single_distortion_bias(params):
     """
