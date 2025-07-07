@@ -400,7 +400,7 @@ class DeepFitFramework():
         if labels is None:
             labels = ['']*self.channr
             for c in range(self.channr):
-                raw_labels[c] = self.raw_file + '_ch' + str(c)
+                labels[c] = self.raw_file + '_ch' + str(c)
         else:
             assert len(labels) == self.channr
 
@@ -907,7 +907,7 @@ class DeepFitFramework():
         v_w_ac = witness_buffer_raw - np.mean(witness_buffer_raw)
         
         # Witness voltage is proportional to f_mod(t). Correct for sign and normalize.
-        f_mod_basis = v_w_ac / np.max(np.abs(v_w_ac))
+        f_mod_basis = - v_w_ac / np.max(np.abs(v_w_ac))
         
         # Integrate the frequency basis to get the phase modulation basis.
         time_axis_buffer = np.arange(R) / main_raw.f_samp
