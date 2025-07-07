@@ -1,9 +1,11 @@
+from .data import DeepRawObject
+
 import numpy as np
 import scipy.constants as sc
 import pyplnoise
 import pandas as pd
 import logging
-from .data import DeepRawObject 
+from typing import Optional
 
 class LaserConfig:
     """
@@ -168,14 +170,14 @@ class SignalGenerator:
     Its primary responsibility is to take configuration objects (`DFMIObject`)
     and produce raw data objects (`DeepRawObject`).
     """
-
-    def generate(self, main_config, n_seconds, mode='asd', trial_num=0, 
-                 witness_config=None, snr_db=None):
+    def generate(self, main_config, n_seconds, mode='asd', trial_num=0,
+                 witness_config=None, snr_db=None, external_noise: Optional[dict] = None):
         """
         Main entry point for generating one or more linked DFMI signals.
 
         This method acts as a router, calling the appropriate internal simulation
-        engine based on the specified mode ('asd' or 'snr').
+        engine based on the specified mode ('asd' or 'snr'). It now supports
+        the injection of pre-computed noise arrays.
 
         Parameters
         ----------
@@ -191,51 +193,44 @@ class SignalGenerator:
             The configuration for a secondary witness channel.
         snr_db : float, optional
             The target Signal-to-Noise Ratio in dB. Required if mode='snr'.
+        external_noise : dict, optional
+            A dictionary of pre-computed noise time-series arrays. If provided,
+            the internal noise generation is skipped, and these arrays are used
+            instead. The keys must match the noise source names (e.g.,
+            'laser_frequency', 'amplitude'). Defaults to None.
 
         Returns
         -------
         dict
-            A dictionary of DeepRawObject instances. It will always contain
-            a 'main' key. If a witness is generated, it will also contain
-            a 'witness' key.
+            A dictionary of DeepRawObject instances keyed by 'main' and 'witness'.
         """
         if mode == 'asd':
-            return self._generate_with_asd(main_config, n_seconds, trial_num, witness_config)
+            return self._generate_with_asd(main_config, n_seconds, trial_num, witness_config, external_noise)
         elif mode == 'snr':
             if snr_db is None:
                 logging.error("SNR mode requires a value for 'snr_db'.")
                 return {}
+            # Note: external_noise is ignored in 'snr' mode for simplicity.
             return self._generate_with_snr(main_config, n_seconds, trial_num, snr_db)
         else:
             logging.error(f"Unknown simulation mode: '{mode}'")
             return {}
 
-    def _generate_with_snr(self, main_config, n_seconds, trial_num, snr_db):
-        """Generates a signal with a specific SNR."""
-        num_samples = int(n_seconds * main_config.f_samp)
-        time_axis = np.arange(num_samples) / main_config.f_samp
-        main_config.N = len(time_axis)
-        
-        y_clean = self._generate_ideal_signal(main_config, time_axis, is_dynamic=False)
-        y_noisy = self._add_white_noise(y_clean, snr_db, trial_num)
-        
-        raw_obj = DeepRawObject(data=pd.DataFrame(y_noisy, columns=["ch0"]))
-        raw_obj.label = main_config.label
-        raw_obj.f_samp = main_config.f_samp
-        raw_obj.f_mod = main_config.laser.f_mod
-        raw_obj.t0 = 0
-        raw_obj.sim = main_config
-        
-        return {'main': raw_obj}
-
-    def _generate_with_asd(self, main_config, n_seconds, trial_num, witness_config):
+    def _generate_with_asd(self, main_config, n_seconds, trial_num, witness_config, external_noise=None):
         """Generates a signal using detailed physical noise ASDs."""
         num_samples = int(n_seconds * main_config.f_samp)
         time_axis = np.arange(num_samples) / main_config.f_samp
         main_config.N = len(time_axis)
 
-        # Noise generation is based on the single shared laser and the main IFO's motion
-        noise = self._generate_noise_arrays(main_config, len(time_axis), trial_num)
+        # If external noise is provided, use it. Otherwise, generate it internally.
+        if external_noise:
+            logging.debug("Using externally provided noise arrays.")
+            # Ensure all required noise keys exist, even if they are zero.
+            noise_keys = ['laser_frequency', 'amplitude', 'df', 'armlength']
+            noise = {key: external_noise.get(key, 0.0) for key in noise_keys}
+        else:
+            logging.debug("Generating noise internally based on ASDs.")
+            noise = self._generate_noise_arrays(main_config, len(time_axis), trial_num)
         
         # The physics engine now returns the ground truth phase
         y_main, phitot_main, phi_sim_main = self._run_simulation_physics(main_config, time_axis, noise, is_dynamic=True)
@@ -246,7 +241,7 @@ class SignalGenerator:
         raw_main.f_mod = main_config.laser.f_mod
         raw_main.sim = main_config
         
-        # --- Store all ground truth and noise signals ---
+        # Store all ground truth and noise signals
         raw_main.phi = phitot_main # The full phase with all noise
         raw_main.phi_sim = phi_sim_main # The ground truth phase to recover
         raw_main.f_noise = noise.get('laser_frequency', 0.0)
@@ -272,6 +267,24 @@ class SignalGenerator:
             output_channels['witness'] = raw_witness
 
         return output_channels
+
+    def _generate_with_snr(self, main_config, n_seconds, trial_num, snr_db):
+        """Generates a signal with a specific SNR."""
+        num_samples = int(n_seconds * main_config.f_samp)
+        time_axis = np.arange(num_samples) / main_config.f_samp
+        main_config.N = len(time_axis)
+        
+        y_clean = self._generate_ideal_signal(main_config, time_axis, is_dynamic=False)
+        y_noisy = self._add_white_noise(y_clean, snr_db, trial_num)
+        
+        raw_obj = DeepRawObject(data=pd.DataFrame(y_noisy, columns=["ch0"]))
+        raw_obj.label = main_config.label
+        raw_obj.f_samp = main_config.f_samp
+        raw_obj.f_mod = main_config.laser.f_mod
+        raw_obj.t0 = 0
+        raw_obj.sim = main_config
+        
+        return {'main': raw_obj}
     
     def _generate_ideal_signal(self, sim_config, time_axis, is_dynamic):
         """Generates a perfect, noiseless DFMI signal."""
