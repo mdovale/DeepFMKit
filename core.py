@@ -369,6 +369,95 @@ class DeepFitFramework():
             fit.label = labels[k]
             self.fits[labels[k]] = fit
 
+    def _create_fit_object_from_df(self, fit_label, source_label, n, R, fs, nbuf, ndata, init_a, init_m):
+        """Creates and registers a DeepFitObject from a results DataFrame.
+
+        This helper method converts the raw DataFrame produced by a fitter into 
+        a fully-populated DeepFitObject. It handles the assignment of all 
+        metadata from the source raw data object and the fit configuration, 
+        and registers the final object in the framework's `self.fits` dictionary.
+
+        Parameters
+        ----------
+        fit_label : str
+            The label for the new DeepFitObject and the key for `self.fits`.
+        source_label : str
+            The label of the source DeepRawObject in `self.raws`.
+        n : int
+            The number of modulation cycles per fit buffer.
+        R : int
+            The buffer size in samples (downsampling factor).
+        fs : float
+            The fit data rate in Hz.
+        nbuf : int
+            The total number of buffers in the fit.
+        ndata : int
+            The number of harmonics used in the fit (for NLS fitters).
+        init_a : float
+            The initial amplitude guess used for the fit.
+        init_m : float
+            The initial modulation depth guess used for the fit.
+
+        Returns
+        -------
+        DeepFitObject
+            The newly created and registered fit object.
+        """
+        df = self.fits_df[fit_label]
+        
+        fit = DeepFitObject()
+        fit.n, fit.R, fit.fs, fit.nbuf, fit.ndata, fit.init_a, fit.init_m = n, R, fs, nbuf, ndata, init_a, init_m
+
+        fit.t0 = self.raws[source_label].t0
+        fit.f_samp = self.raws[source_label].f_samp
+        fit.f_mod  = self.raws[source_label].f_mod
+        
+        fit.ssq = df['ssq'].to_numpy()
+        fit.amp = df['amp'].to_numpy()
+        fit.m   = df['m'].to_numpy()
+        fit.phi = df['phi'].to_numpy()
+        fit.psi = df['psi'].to_numpy()
+        fit.dc  = df['dc'].to_numpy()
+        fit.time = np.arange(0, fit.ssq.shape[0] / fit.fs, 1. / fit.fs)
+        fit.label = fit_label
+        
+        self.fits[fit_label] = fit
+        return fit
+
+    def fit_init(self, label, n):
+        """Calculates key parameters for a fitting run.
+
+        Takes the desired number of modulation cycles to include in a buffer
+        (`n`) and calculates the resulting buffer size, fit rate, and
+        the total number of buffers available in the dataset.
+
+        Parameters
+        ----------
+        label : str
+            The label of the source DeepRawObject in `self.raws`.
+        n : int
+            The number of modulation periods (`f_mod`) to include in each
+            analysis buffer.
+
+        Returns
+        -------
+        tuple
+            A tuple containing (R, fs, nbuf):
+            R : int
+                The buffer size in samples.
+            fs : float
+                The resulting fit data rate in Hz (f_samp / R).
+            nbuf : int
+                The total number of full buffers available in the raw data.
+        """
+        R = int(self.raws[label].f_samp/self.raws[label].f_mod*n)
+        fs = self.raws[label].f_samp/R
+        nbuf = int(self.raws[label].data.shape[0]/R)
+        if nbuf == 0:
+            logging.error('Check buffer size !! Calculated nbuf is zero.')
+
+        return R, fs, nbuf
+    
     def fit(self, main_label, method='nls', fit_label=None, **kwargs):
         """
         Fits raw data using a specified algorithm via the Strategy pattern.
@@ -459,39 +548,6 @@ class DeepFitFramework():
         self.fits[fit_label] = fit_obj
         
         return fit_obj
-
-    def _create_fit_object_from_df(self, fit_label, source_label, n, R, fs, nbuf, ndata, init_a, init_m):
-        """Helper to create a DeepFitObject from a results DataFrame."""
-        df = self.fits_df[fit_label]
-        
-        fit = DeepFitObject()
-        fit.n, fit.R, fit.fs, fit.nbuf, fit.ndata, fit.init_a, fit.init_m = n, R, fs, nbuf, ndata, init_a, init_m
-
-        fit.t0 = self.raws[source_label].t0
-        fit.f_samp = self.raws[source_label].f_samp
-        fit.f_mod  = self.raws[source_label].f_mod
-        
-        fit.ssq = df['ssq'].to_numpy()
-        fit.amp = df['amp'].to_numpy()
-        fit.m   = df['m'].to_numpy()
-        fit.phi = df['phi'].to_numpy()
-        fit.psi = df['psi'].to_numpy()
-        fit.dc  = df['dc'].to_numpy()
-        fit.time = np.arange(0, fit.ssq.shape[0] / fit.fs, 1. / fit.fs)
-        fit.label = fit_label
-        
-        self.fits[fit_label] = fit
-        return fit
-
-    def fit_init(self, label, n):
-
-        R = int(self.raws[label].f_samp/self.raws[label].f_mod*n)
-        fs = self.raws[label].f_samp/R
-        nbuf = int(self.raws[label].data.shape[0]/R)
-        if nbuf == 0:
-            logging.error('Check buffer size !!')
-
-        return R, fs, nbuf
     
     def create_witness_channel(self, main_channel_label, witness_channel_label, m_witness=None, delta_l_witness=None):
         """
