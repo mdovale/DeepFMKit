@@ -52,16 +52,11 @@ dff = dfm.DeepFitFramework()
 # --- 1. Define the Single, Shared Laser Source ---
 laser_config = dfm.LaserConfig(label="main_laser")
 laser_config.f_mod = 1000 # Modulation frequency (Hz)
-laser_config.f_n = 1e6 # Laser frequency noise at 1 Hz (Hz/rtHz)
-laser_config.amp_n = 1e-5 # Laser amplitude noise (1/rtHz)
 
 # --- 2. Define the Main Interferometer ---
 main_ifo_config = dfm.InterferometerConfig(label="dynamic_ifo")
 main_ifo_config.ref_arml = 0.1 # Reference arm length (m)
 main_ifo_config.meas_arml = 0.3 # Measurement arm length (m)
-main_ifo_config.arml_mod_f = 1.0 # Measurement arm modulation frequency (Hz)
-main_ifo_config.arml_mod_amp = 1e-9 # Armlength modulation amplitude (m)
-main_ifo_config.arml_mod_n = 1e-12 # Armlength modulation amplitude noise (m/rtHz)
 
 # --- 3. Set Modulation Depth by Adjusting Laser's `df` ---
 m_target = 6.0 # Target effective modulation index (rad)
@@ -82,7 +77,9 @@ dff.sims[main_label] = main_channel
 # --- 6. Simulate ---
 dff.simulate(
     main_label=main_label,
-    n_seconds=10 # Simulation length in seconds
+    n_seconds=10, # Simulation length in seconds
+    mode='snr',
+    snr_db=40
 )
 
 # --- 7. Analyze and Plot ---
@@ -90,7 +87,7 @@ print("\n--- Configuration Summaries ---")
 dff.sims[main_label].info()
 
 print("\n--- Fitting Channels ---")
-dff.fit(label=main_label)
+dff.fit(main_label)
 
 print("\n--- Plotting Results ---")
 ax = dff.plot()
