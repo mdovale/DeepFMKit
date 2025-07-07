@@ -1,8 +1,11 @@
-import logging
-from typing import Optional
-
 from . import core as dfm
 from .physics import LaserConfig, InterferometerConfig
+
+from typing import Optional
+import numpy as np
+from tqdm import tqdm
+import multiprocessing
+import os
 
 def run_single_trial(
     laser_config: LaserConfig,
@@ -91,3 +94,66 @@ def run_single_trial(
     fit_obj = dff.fit(main_label, method=fitter_method, **fitter_kwargs)
 
     return fit_obj
+
+def run_monte_carlo(
+    worker_func,
+    n_trials: int,
+    static_params: dict,
+    dynamic_params_generator,
+    n_cores: Optional[int] = None
+) -> np.ndarray:
+    """
+    Runs a parallel Monte Carlo simulation by repeatedly calling a worker.
+
+    This function provides a generic framework for running Monte Carlo studies.
+    It handles the boilerplate of setting up a parallel pool, creating a list
+    of jobs with varying parameters, executing the jobs, and collecting the
+    results.
+
+    Parameters
+    ----------
+    worker_func : callable
+        The worker function to be called for each trial. This function must
+        accept a single dictionary of parameters.
+    n_trials : int
+        The total number of Monte Carlo trials to run.
+    static_params : dict
+        A dictionary of parameters that remain constant for all trials.
+    dynamic_params_generator : callable
+        A function that takes a trial index (int) and returns a dictionary
+        of parameters that change for each trial. This is used to inject
+        randomness (e.g., random phases).
+    n_cores : int, optional
+        The number of CPU cores to use for parallel execution. If None,
+        defaults to all available cores.
+
+    Returns
+    -------
+    np.ndarray
+        A numpy array containing the results from all trials. The shape will
+        depend on the return value of the worker function.
+    """
+    if n_cores is None:
+        n_cores = os.cpu_count()
+
+    # --- 1. Create the full list of jobs to be run ---
+    all_jobs = []
+    for i in range(n_trials):
+        # Get the unique, randomized parameters for this specific trial
+        dynamic_params = dynamic_params_generator(i)
+        
+        # Combine the static and dynamic parameters into one dictionary for the worker
+        job_params = {**static_params, **dynamic_params}
+        all_jobs.append(job_params)
+
+    # --- 2. Run the Simulations in Parallel ---
+    print(f"Starting Monte Carlo run with {len(all_jobs)} trials on {n_cores} cores...")
+    
+    # The 'if __name__ == "__main__"` guard is critical for scripts,
+    # but since this is a library, we rely on the caller to use it.
+    with multiprocessing.Pool(processes=n_cores) as pool:
+        results_iterator = pool.imap(worker_func, all_jobs)
+        # Use tqdm to show a progress bar for the parallel execution
+        all_results = list(tqdm(results_iterator, total=len(all_jobs), desc="Monte Carlo Trials"))
+
+    return np.array(all_results)
