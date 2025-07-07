@@ -448,7 +448,7 @@ class WDFMI_NLSFitter(BaseFitter):
         results_list = []
         logging.debug(f"Processing '{main_raw.label}' with WDFMI_NLSFitter...")
         
-        for b in tqdm(range(nbuf), desc="WDFMI NLS Fit"):
+        for b in range(nbuf):
             buf_range = range(b * R, (b + 1) * R)
             main_buffer_raw = np.array(main_raw.data.iloc[buf_range]).flatten()
             
@@ -533,7 +533,7 @@ class WDFMI_OrthogonalFitter(BaseFitter):
         results_list = []
         logging.debug(f"Processing '{main_raw.label}' with WDFMI_OrthogonalFitter...")
 
-        for b in tqdm(range(nbuf), desc="WDFMI Ortho Fit"):
+        for b in range(nbuf):
             buf_range = range(b * R, (b + 1) * R)
             main_buffer_raw = np.array(main_raw.data.iloc[buf_range]).flatten()
             v_main_ac = main_buffer_raw - np.mean(main_buffer_raw)
@@ -625,7 +625,7 @@ class WDFMI_SequentialFitter(BaseFitter):
         results_list = []
         logging.debug(f"Processing '{main_raw.label}' with WDFMI_SequentialFitter...")
         
-        for b in tqdm(range(nbuf), desc="WDFMI Seq Fit"):
+        for b in range(nbuf):
             buf_range = range(b * R, (b + 1) * R)
             main_buffer_raw = np.array(main_raw.data.iloc[buf_range]).flatten()
             v_main_ac = main_buffer_raw - np.mean(main_buffer_raw)
