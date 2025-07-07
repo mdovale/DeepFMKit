@@ -1,12 +1,13 @@
 import os
 from multiprocessing import Pool
-from scipy.optimize import minimize, minimize_scalar
+from scipy.optimize import minimize, minimize_scalar, least_squares
 from .fit import fit, calculate_quadratures
 from abc import ABC, abstractmethod
 import numpy as np
 import pandas as pd
 import logging
 from tqdm import tqdm
+from scipy import constants as sc
 
 def _process_fit_chunk(args):
     """
@@ -83,6 +84,42 @@ def _calculate_fit_params(raw_obj, n):
     if nbuf == 0:
         logging.error('Check buffer size! nbuf is zero.')
     return R, fs, nbuf
+
+def _get_phase_modulation_basis(witness_raw, R, f_samp):
+    """
+    Processes a witness signal to extract the phase modulation basis waveform.
+
+    This is a helper function that I created to avoid duplicating code across
+    all my W-DFMI fitters. It takes the witness signal, removes the DC offset,
+    normalizes it, and integrates it to get the phase waveform.
+
+    Parameters
+    ----------
+    witness_raw : DeepRawObject
+        The raw data object for the witness channel.
+    R : int
+        The buffer size in samples.
+    f_samp : float
+        The sampling frequency.
+
+    Returns
+    -------
+    tuple
+        A tuple containing (phi_mod_basis, time_axis_buffer).
+    """
+    # I'll use the first buffer of the witness signal as the definitive template
+    witness_buffer_raw = np.array(witness_raw.data.iloc[0:R]).flatten()
+    v_w_ac = witness_buffer_raw - np.mean(witness_buffer_raw)
+    
+    # Witness voltage is proportional to f_mod(t). I correct for the sign inversion
+    # at the mid-fringe point and normalize the waveform.
+    f_mod_basis = -v_w_ac / np.max(np.abs(v_w_ac))
+    
+    time_axis_buffer = np.arange(R) / f_samp
+    dt = time_axis_buffer[1] - time_axis_buffer[0]
+    phi_mod_basis = np.cumsum(f_mod_basis) * dt
+    
+    return phi_mod_basis, time_axis_buffer
 
 class BaseFitter(ABC):
     """
@@ -377,3 +414,296 @@ class StandardNLSFitter(BaseFitter):
         initial_guess = np.array([init_a, init_m, 0.0, psi])
         result_dict = self._fit_single_buffer(main_raw, 0, R, ndata, initial_guess)
         return result_dict['ssq']
+    
+class WDFMI_NLSFitter(BaseFitter):
+    """
+    A W-DFMI fitter using a direct Non-Linear Least Squares approach.
+    It fits for all 4 parameters (C, tau, phi, psi) simultaneously.
+    """
+    def fit(self, main_raw, witness_raw, **kwargs) -> pd.DataFrame:
+        """
+        Performs a fit using the physically exact W-DFMI model.
+        """
+        # --- 1. Unpack Configuration ---
+        n = self.config['n']
+        ndata = self.config.get('ndata', 10)
+        
+        init_a = kwargs.get('init_a', 1.6)
+        init_m = kwargs.get('init_m', 6.0)
+        init_phi = kwargs.get('init_phi', 0.0)
+        init_psi = kwargs.get('init_psi', 0.0)
+        
+        R, _, nbuf = _calculate_fit_params(main_raw, n)
+        if nbuf == 0: return pd.DataFrame()
+
+        laser_cfg = main_raw.sim.laser
+        main_ifo_cfg = main_raw.sim.ifo
+        omega_mod = 2 * np.pi * laser_cfg.f_mod
+        w0_samp = omega_mod / main_raw.f_samp
+        
+        # --- 2. Process Witness Signal ---
+        phi_mod_basis, time_axis_buffer = _get_phase_modulation_basis(witness_raw, R, main_raw.f_samp)
+        
+        # --- 3. Main Fitting Loop ---
+        delta_l = main_ifo_cfg.meas_arml - main_ifo_cfg.ref_arml
+        tau_init = delta_l / sc.c
+        current_guess = np.array([init_a, tau_init, init_phi, init_psi])
+        
+        results_list = []
+        logging.info(f"Processing '{main_raw.label}' with WDFMI_NLSFitter...")
+        
+        for b in tqdm(range(nbuf), desc="WDFMI NLS Fit"):
+            buf_range = range(b * R, (b + 1) * R)
+            main_buffer_raw = np.array(main_raw.data.iloc[buf_range]).flatten()
+            
+            # This is the cost function, defined inside the loop to capture the
+            # loop-specific `main_buffer_raw` data.
+            def _wdfmi_residuals(params, phi_mod_basis_arg, QI_meas):
+                C, tau, phi, psi = params
+                
+                phi_mod_unscaled = 2 * np.pi * laser_cfg.df * phi_mod_basis_arg
+                
+                t_interp_psi = time_axis_buffer - (-psi / omega_mod)
+                phi_mod_shifted = np.interp(t_interp_psi, time_axis_buffer, phi_mod_unscaled, period=time_axis_buffer[-1])
+                
+                t_interp_tau = time_axis_buffer - tau
+                phi_mod_delayed = np.interp(t_interp_tau, time_axis_buffer, phi_mod_shifted, period=time_axis_buffer[-1])
+                
+                delta_phi_mod = phi_mod_delayed - phi_mod_shifted
+                v_model = C * np.cos(phi + delta_phi_mod)
+                
+                QI_model = np.zeros(2 * ndata)
+                for i in range(ndata):
+                    n_harm = i + 1
+                    QI_model[i] = (2/R) * np.sum(v_model * np.cos(n_harm * w0_samp * np.arange(R)))
+                    QI_model[i + ndata] = (2/R) * np.sum(v_model * np.sin(n_harm * w0_samp * np.arange(R)))
+                
+                return QI_model - QI_meas
+
+            QI_data_meas = np.zeros(2 * ndata)
+            for i in range(ndata):
+                n_harm = i + 1
+                QI_data_meas[i] = (2/R) * np.sum(main_buffer_raw * np.cos(n_harm * w0_samp * np.arange(R)))
+                QI_data_meas[i + ndata] = (2/R) * np.sum(main_buffer_raw * np.sin(n_harm * w0_samp * np.arange(R)))
+
+            opt_result = least_squares(
+                _wdfmi_residuals, current_guess,
+                args=(phi_mod_basis, QI_data_meas), method='lm'
+            )
+            
+            fit_parm = opt_result.x
+            C_fit, tau_fit, phi_fit, psi_fit = fit_parm
+            m_fit = 2 * np.pi * laser_cfg.df * tau_fit
+            current_guess = fit_parm
+            
+            results_list.append({
+                'amp': C_fit, 'm': m_fit, 'phi': phi_fit, 'psi': psi_fit, 
+                'dc': np.mean(main_buffer_raw),
+                'ssq': np.sum(opt_result.fun**2), 'fitok': 1 if opt_result.success else 0
+            })
+            
+        return pd.DataFrame(results_list)
+
+class WDFMI_OrthogonalFitter(BaseFitter):
+    """
+    Fits W-DFMI data using the robust Orthogonal Demodulation (VarPro) algorithm.
+    This is my most robust and definitive W-DFMI implementation.
+    """
+    def fit(self, main_raw, witness_raw, **kwargs) -> pd.DataFrame:
+        """
+        Performs a fit using the two-stage Orthogonal Demodulation method.
+        """
+        # --- 1. Unpack Configuration ---
+        n = self.config['n']
+        init_m = kwargs.get('init_m', 6.0)
+        init_psi = kwargs.get('init_psi', 0.0)
+        
+        R, _, nbuf = _calculate_fit_params(main_raw, n)
+        if nbuf == 0: return pd.DataFrame()
+
+        laser_cfg = main_raw.sim.laser
+        main_ifo_cfg = main_raw.sim.ifo
+        omega_mod = 2 * np.pi * laser_cfg.f_mod
+
+        # --- 2. Process Witness Signal ---
+        phi_mod_basis, time_axis_buffer = _get_phase_modulation_basis(witness_raw, R, main_raw.f_samp)
+        phi_mod_unscaled = 2 * np.pi * laser_cfg.df * phi_mod_basis
+
+        # --- 3. Main Fitting Loop ---
+        delta_l = main_ifo_cfg.meas_arml - main_ifo_cfg.ref_arml
+        tau_init = delta_l / sc.c if laser_cfg.df > 0 else 0.0
+        current_guess = np.array([tau_init, init_psi])
+
+        results_list = []
+        logging.info(f"Processing '{main_raw.label}' with WDFMI_OrthogonalFitter...")
+
+        for b in tqdm(range(nbuf), desc="WDFMI Ortho Fit"):
+            buf_range = range(b * R, (b + 1) * R)
+            main_buffer_raw = np.array(main_raw.data.iloc[buf_range]).flatten()
+            v_main_ac = main_buffer_raw - np.mean(main_buffer_raw)
+
+            def _get_bases(tau, psi):
+                t_interp_psi = time_axis_buffer - (-psi / omega_mod)
+                phi_mod_shifted = np.interp(t_interp_psi, time_axis_buffer, phi_mod_unscaled, period=time_axis_buffer[-1])
+                t_interp_tau = time_axis_buffer - tau
+                phi_mod_delayed = np.interp(t_interp_tau, time_axis_buffer, phi_mod_shifted, period=time_axis_buffer[-1])
+                delta_phi_mod = phi_mod_delayed - phi_mod_shifted
+                return np.cos(delta_phi_mod), np.sin(delta_phi_mod)
+
+            def _outer_loop_cost(params):
+                tau, psi = params
+                basis_I, basis_Q = _get_bases(tau, psi)
+                A_matrix = np.vstack([basis_I, basis_Q]).T
+                _, res, _, _ = np.linalg.lstsq(A_matrix, v_main_ac, rcond=None)
+                return res[0]
+
+            opt_result = minimize(_outer_loop_cost, current_guess, method='Nelder-Mead')
+            
+            tau_fit, psi_fit = opt_result.x
+            
+            basis_I, basis_Q = _get_bases(tau_fit, psi_fit)
+            A_matrix = np.vstack([basis_I, basis_Q]).T
+            p_final, final_res, _, _ = np.linalg.lstsq(A_matrix, v_main_ac, rcond=None)
+            I_fit, Q_fit = p_final
+            
+            C_fit = np.sqrt(I_fit**2 + Q_fit**2)
+            phi_fit = np.arctan2(-Q_fit, I_fit)
+            m_fit = 2 * np.pi * laser_cfg.df * tau_fit
+            current_guess = np.array([tau_fit, psi_fit])
+
+            results_list.append({
+                'amp': C_fit, 'm': m_fit, 'phi': phi_fit, 'psi': psi_fit,
+                'dc': np.mean(main_buffer_raw),
+                'ssq': final_res[0] if final_res.size > 0 else 0,
+                'fitok': 1 if opt_result.success else 0
+            })
+            
+        return pd.DataFrame(results_list)
+    
+class WDFMI_SequentialFitter(BaseFitter):
+    """
+    Fits W-DFMI data using the sequential bootstrap algorithm.
+
+    I implemented this algorithm because it is immune to the `tau-psi`
+    degeneracy and the numerical instabilities of a simultaneous 4D fit.
+    It works by sequentially solving for parameters using the most robust
+    method available at each stage.
+    """
+    def fit(self, main_raw, witness_raw, **kwargs) -> pd.DataFrame:
+        """
+        Performs a fit using the three-stage sequential bootstrap method.
+
+        1. Finds `tau` via a 1D Variable Projection (VarPro) fit.
+        2. With `tau` fixed, finds `psi` via a robust 1D "Differential Phase" fit.
+        3. With both `tau` and `psi` known, performs a final linear fit for `C` and `Phi`.
+
+        Parameters
+        ----------
+        main_raw : DeepRawObject
+            The raw data object for the primary channel to be fitted.
+        witness_raw : DeepRawObject
+            The raw data object for the witness channel.
+        **kwargs :
+            Keyword arguments for the fit:
+            - init_psi (float): Initial guess for the modulation phase.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the fit results over time.
+        """
+        # --- 1. Unpack Configuration ---
+        n = self.config['n']
+        init_psi = kwargs.get('init_psi', 0.0)
+        
+        R, _, nbuf = _calculate_fit_params(main_raw, n)
+        if nbuf == 0: return pd.DataFrame()
+
+        laser_cfg = main_raw.sim.laser
+        main_ifo_cfg = main_raw.sim.ifo
+        omega_mod = 2 * np.pi * laser_cfg.f_mod
+
+        # --- 2. Process Witness Signal ---
+        phi_mod_basis, time_axis_buffer = _get_phase_modulation_basis(witness_raw, R, main_raw.f_samp)
+        phi_mod_unscaled = 2 * np.pi * laser_cfg.df * phi_mod_basis
+
+        # --- 3. Main Fitting Loop ---
+        results_list = []
+        logging.info(f"Processing '{main_raw.label}' with WDFMI_SequentialFitter...")
+        
+        for b in tqdm(range(nbuf), desc="WDFMI Seq Fit"):
+            buf_range = range(b * R, (b + 1) * R)
+            main_buffer_raw = np.array(main_raw.data.iloc[buf_range]).flatten()
+            v_main_ac = main_buffer_raw - np.mean(main_buffer_raw)
+            
+            # --- Helper function to construct time-domain basis functions ---
+            def get_bases(tau, psi):
+                t_interp_psi = time_axis_buffer - (-psi / omega_mod)
+                phi_mod_shifted = np.interp(t_interp_psi, time_axis_buffer, phi_mod_unscaled, period=time_axis_buffer[-1])
+                t_interp_tau = time_axis_buffer - tau
+                phi_mod_delayed = np.interp(t_interp_tau, time_axis_buffer, phi_mod_shifted, period=time_axis_buffer[-1])
+                delta_phi_mod = phi_mod_delayed - phi_mod_shifted
+                return np.cos(delta_phi_mod), np.sin(delta_phi_mod)
+
+            # --- Stage 1: Find Tau using VarPro ---
+            def cost_tau(tau):
+                basis_I, basis_Q = get_bases(tau, init_psi) # Use initial psi guess for this stage
+                A_matrix = np.vstack([basis_I, basis_Q]).T
+                _, res, _, _ = np.linalg.lstsq(A_matrix, v_main_ac, rcond=None)
+                return res[0] if res.size > 0 else np.inf
+            
+            delta_l = main_ifo_cfg.meas_arml - main_ifo_cfg.ref_arml
+            tau_init = delta_l / sc.c if laser_cfg.df > 0 else 0.0
+            tau_bracket = (tau_init * 0.9, tau_init * 1.1) if tau_init > 0 else (-1e-9, 1e-9)
+            res_tau = minimize_scalar(cost_tau, bracket=tau_bracket, method='brent')
+            tau_fit = res_tau.x
+            
+            # --- Stage 2: Find Psi using Differential Phase ---
+            ndata_psi = 40 # Number of harmonics for this stage
+            w0_samp = omega_mod / main_raw.f_samp
+            Q_meas, I_meas = np.zeros(ndata_psi), np.zeros(ndata_psi)
+            for i in range(ndata_psi):
+                n_harm = i + 1
+                Q_meas[i] = (2/R) * np.sum(v_main_ac * np.cos(n_harm * w0_samp * np.arange(R)))
+                I_meas[i] = (2/R) * np.sum(v_main_ac * np.sin(n_harm * w0_samp * np.arange(R)))
+            alpha_meas = Q_meas + 1j * I_meas
+
+            def get_model_spectrum(psi_trial):
+                basis_I, basis_Q = get_bases(tau_fit, psi_trial)
+                A_matrix = np.vstack([basis_I, basis_Q]).T
+                p_final, _, _, _ = np.linalg.lstsq(A_matrix, v_main_ac, rcond=None)
+                I_fit, Q_fit = p_final
+                v_model_approx = I_fit * basis_I - Q_fit * basis_Q
+                Q_m, I_m = np.zeros(ndata_psi), np.zeros(ndata_psi)
+                for i in range(ndata_psi):
+                    n_harm = i + 1
+                    Q_m[i] = (2/R) * np.sum(v_model_approx * np.cos(n_harm * w0_samp * np.arange(R)))
+                    I_m[i] = (2/R) * np.sum(v_model_approx * np.sin(n_harm * w0_samp * np.arange(R)))
+                return Q_m + 1j * I_m
+                
+            def cost_psi(psi_deviation):
+                alpha_model = get_model_spectrum(init_psi + psi_deviation)
+                phase_error = np.angle(alpha_meas * np.conj(alpha_model))
+                return np.var(np.unwrap(phase_error))
+                
+            res_psi = minimize_scalar(cost_psi, bounds=(-np.pi/2, np.pi/2), method='bounded')
+            psi_fit = init_psi + res_psi.x
+            
+            # --- Stage 3: Final Linear Fit ---
+            basis_I, basis_Q = get_bases(tau_fit, psi_fit)
+            A_matrix = np.vstack([basis_I, basis_Q]).T
+            p_final, final_res, _, _ = np.linalg.lstsq(A_matrix, v_main_ac, rcond=None)
+            I_fit, Q_fit = p_final
+            
+            C_fit = np.sqrt(I_fit**2 + Q_fit**2)
+            phi_fit = np.arctan2(-Q_fit, I_fit)
+            m_fit = 2 * np.pi * laser_cfg.df * tau_fit
+            
+            results_list.append({
+                'amp': C_fit, 'm': m_fit, 'phi': phi_fit, 'psi': psi_fit,
+                'dc': np.mean(main_buffer_raw),
+                'ssq': final_res[0] if final_res.size > 0 else 0.0,
+                'fitok': 1
+            })
+
+        return pd.DataFrame(results_list)
