@@ -2,6 +2,44 @@ import DeepFMKit.core as dfm
 import numpy as np
 import scipy.constants as sc
 
+def calculate_ambiguity_boundary_point(params):
+    """
+    Calculates the coarse phase error for a single point in the
+    (delta_f, delta_m) parameter space.
+
+    This is a simple, non-simulation worker that applies the core theoretical
+    equation: delta_Phi_coarse = -delta_m * (f0 / df).
+
+    Parameters
+    ----------
+    params : dict
+        A dictionary containing the point's parameters:
+        - 'delta_f': The modulation amplitude (df).
+        - 'delta_m': The total uncertainty/bias on the m estimate.
+        - 'f0': The laser carrier frequency.
+        - 'grid_i', 'grid_j': Indices for the output grid.
+
+    Returns
+    -------
+    tuple
+        (grid_i, grid_j, coarse_phase_error)
+    """
+    # This worker is purely computational, no need for DFF.
+    delta_f = params['delta_f']
+    delta_m = params['delta_m']
+    f0 = params['f0']
+    grid_i = params['grid_i']
+    grid_j = params['grid_j']
+    
+    # Avoid division by zero if delta_f is zero
+    if delta_f == 0:
+        return (grid_i, grid_j, float('inf'))
+        
+    coarse_phase_error = -delta_m * (f0 / delta_f)
+    
+    return (grid_i, grid_j, np.abs(coarse_phase_error))
+
+
 def run_efficiency_trial(params):
     """
     A self-contained worker for a single fitter efficiency trial.
@@ -466,7 +504,10 @@ def calculate_bias_for_m_vs_mwitness(params):
         return (grid_i, grid_j, np.nan) 
 
     # Execute the chosen fitter
-    fit_obj = fitter_function(main_label, witness_label, fit_label="wdfmi_fit", verbose=False)
+    if fitter_func_name == 'fit':
+        fit_obj = fitter_function(main_label, fit_label="wdfmi_fit", ndata=int(m_main_target+15), parallel=False, verbose=False)
+    else:
+        fit_obj = fitter_function(main_label, witness_label, fit_label="wdfmi_fit", verbose=False)
     
     bias = np.nan
     if fit_obj and fit_obj.m.size > 0:

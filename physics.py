@@ -235,7 +235,7 @@ class SignalGenerator:
         main_config.N = len(time_axis)
 
         # Noise generation is based on the single shared laser and the main IFO's motion
-        noise = self._generate_noise_arrays(main_config, time_axis, trial_num)
+        noise = self._generate_noise_arrays(main_config, len(time_axis), trial_num)
         
         # The physics engine now returns the ground truth phase
         y_main, phitot_main, phi_sim_main = self._run_simulation_physics(main_config, time_axis, noise, is_dynamic=True)
@@ -312,7 +312,7 @@ class SignalGenerator:
         noise = rng.randn(len(clean_signal)) * noise_std_dev
         return clean_signal + noise
 
-    def _generate_noise_arrays(self, sim_config, time_axis, trial_num=0):
+    def _generate_noise_arrays(self, sim_config, n_samples, trial_num=0):
         """
         Generates time-series noise arrays for different physical sources.
 
@@ -333,9 +333,8 @@ class SignalGenerator:
         sim_config : DFMIObject
             The simulation configuration object containing noise parameters like
             `f_n`, `amp_n`, `df_n`, etc.
-        time_axis : numpy.ndarray
-            The time vector for the simulation. Its length determines the number
-            of samples to generate.
+        n_samples : int
+            Number of data samples to generate
         trial_num : int, optional
             A number used to seed the random noise generators, ensuring
             reproducible but different noise for each trial. Defaults to 0.
@@ -347,7 +346,8 @@ class SignalGenerator:
             'amplitude') and values are the corresponding numpy arrays of the
             generated noise time series.
         """
-        num_samples = len(time_axis)
+        num_samples = int(n_samples)
+        assert num_samples > 0, f"num_samples should be greater than zero, got {num_samples}"
         fs = sim_config.f_samp
         noise_params = {
             'laser_frequency': {'asd': sim_config.laser.f_n, 'alpha': 2.0},
