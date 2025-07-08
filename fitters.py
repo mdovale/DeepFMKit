@@ -1,6 +1,7 @@
 import os
 from multiprocessing import Pool
 from scipy.optimize import minimize, minimize_scalar, least_squares
+from scipy.integrate import cumulative_trapezoid
 from .fit import fit, calculate_quadratures
 from abc import ABC, abstractmethod
 import numpy as np
@@ -119,6 +120,46 @@ def _get_phase_modulation_basis(witness_raw, R, f_samp):
     phi_mod_basis = np.cumsum(f_mod_basis) * dt
     
     return phi_mod_basis, time_axis_buffer
+
+def _get_total_laser_phase(witness_raw, R, f_samp, f_ref):
+    """
+    Processes a heterodyne witness signal to extract the total laser phase.
+
+    This helper function is specific to the HW-DFMI algorithm. It takes the
+    witness signal, which represents the beatnote frequency f_main(t) - f_ref,
+    and integrates it to get the total accumulated phase of the main laser.
+
+    Parameters
+    ----------
+    witness_raw : DeepRawObject
+        The raw data object for the HW-DFMI witness channel. Its data is
+        assumed to be the instantaneous beatnote frequency in Hz.
+    R : int
+        The buffer size in samples.
+    f_samp : float
+        The sampling frequency.
+    f_ref : float
+        The frequency of the stable reference laser in Hz.
+
+    Returns
+    -------
+    tuple
+        A tuple containing (phi_main, time_axis_buffer).
+    """
+    # I'll use the first buffer of the witness signal as the definitive template
+    # The data is assumed to be the frequency of the beatnote f_beat(t).
+    f_beat = np.array(witness_raw.data.iloc[0:R]).flatten()
+    
+    time_axis_buffer = np.arange(R) / f_samp
+    dt = time_axis_buffer[1] - time_axis_buffer[0]
+    
+    # Reconstruct the main laser's total phase by integrating its frequency.
+    # f_main(t) = f_beat(t) + f_ref.
+    # phi_main(t) = 2*pi * integral(f_main(t')) dt'.
+    # I'll use cumulative trapezoidal integration for better accuracy.
+    phi_main = 2 * np.pi * cumulative_trapezoid(f_beat + f_ref, dx=dt, initial=0)
+    
+    return phi_main, time_axis_buffer
 
 class BaseFitter(ABC):
     """
@@ -413,6 +454,8 @@ class StandardNLSFitter(BaseFitter):
     
 class WDFMI_NLSFitter(BaseFitter):
     """
+    * EXPERIMENTAL *
+    
     A W-DFMI fitter using a direct Non-Linear Least Squares approach.
     It fits for all 4 parameters (C, tau, phi, psi) simultaneously.
     """
@@ -502,6 +545,8 @@ class WDFMI_NLSFitter(BaseFitter):
 
 class WDFMI_OrthogonalFitter(BaseFitter):
     """
+    * EXPERIMENTAL *
+
     Fits W-DFMI data using the robust Orthogonal Demodulation (VarPro) algorithm.
     This is my most robust and definitive W-DFMI implementation.
     """
@@ -578,6 +623,8 @@ class WDFMI_OrthogonalFitter(BaseFitter):
     
 class WDFMI_SequentialFitter(BaseFitter):
     """
+    * EXPERIMENTAL *
+
     Fits W-DFMI data using the sequential bootstrap algorithm.
 
     It works by sequentially solving for parameters using the most robust
@@ -700,4 +747,122 @@ class WDFMI_SequentialFitter(BaseFitter):
                 'fitok': 1
             })
 
+        return pd.DataFrame(results_list)
+    
+class HWDFMI_Fitter(BaseFitter):
+    """
+    * EXPERIMENTAL *
+
+    Fits HW-DFMI data using the definitive 1D Orthogonal Demodulation algorithm.
+
+    This is the most advanced fitter, designed for the HW-DFMI architecture.
+    It leverages a heterodyne witness to measure the laser's total instantaneous
+    frequency, which eliminates nearly all free parameters from the model. The
+    readout reduces to a highly robust 1D search for the physical time delay `tau`,
+    providing a direct measurement of the absolute path length difference.
+    """
+    def fit(self, main_raw, witness_raw, **kwargs) -> pd.DataFrame:
+        """
+        Performs a fit using the 1D VarPro method on HW-DFMI data.
+
+        Parameters
+        ----------
+        main_raw : DeepRawObject
+            The raw data object for the primary measurement channel.
+        witness_raw : DeepRawObject
+            The raw data object for the heterodyne witness. Its data must be
+            the instantaneous beatnote frequency, f_main(t) - f_ref.
+        **kwargs :
+            - init_tau (float, optional): An initial guess for the time delay tau.
+              If not provided, it's estimated from the interferometer config.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the fit results.
+        """
+        # --- 1. Unpack Configuration ---
+        n = self.config['n']
+        init_tau_kwarg = kwargs.get('init_tau', None)
+        
+        R, _, nbuf = _calculate_fit_params(main_raw, n)
+        if nbuf == 0: return pd.DataFrame()
+
+        # HW-DFMI requires the reference laser frequency, which I'll assume is
+        # stored in the witness interferometer config as its 'arml_mod_f'
+        # for lack of a better place. This is a convention I'm establishing.
+        if hasattr(witness_raw.sim.ifo, 'arml_mod_f'):
+            f_ref = witness_raw.sim.ifo.arml_mod_f
+        else:
+            logging.warning("Reference frequency `f_ref` not found in witness config. Assuming 0 Hz.")
+            f_ref = 0.0
+
+        # --- 2. Process Witness Signal ---
+        phi_main_template, time_axis_buffer = _get_total_laser_phase(witness_raw, R, main_raw.f_samp, f_ref)
+
+        # --- 3. Main Fitting Loop ---
+        if init_tau_kwarg is not None:
+            current_tau_guess = init_tau_kwarg
+        else:
+            delta_l_init = main_raw.sim.ifo.meas_arml - main_raw.sim.ifo.ref_arml
+            current_tau_guess = delta_l_init / sc.c
+
+        results_list = []
+        logging.debug(f"Processing '{main_raw.label}' with HWDFMI_Fitter...")
+
+        for b in tqdm(range(nbuf), desc="HW-DFMI Fit Progress"):
+            buf_range = range(b * R, (b + 1) * R)
+            main_buffer_raw = np.array(main_raw.data.iloc[buf_range]).flatten()
+            v_main_ac = main_buffer_raw - np.mean(main_buffer_raw)
+
+            # --- Inner function to construct orthogonal bases for a given tau ---
+            def get_bases(tau):
+                t_interp_delayed = time_axis_buffer - tau
+                phi_main_delayed = np.interp(t_interp_delayed, time_axis_buffer, phi_main_template)
+                delta_phi_mod = phi_main_template - phi_main_delayed
+                return np.cos(delta_phi_mod), np.sin(delta_phi_mod)
+
+            # --- VarPro cost function for the 1D outer loop ---
+            def outer_loop_cost(tau):
+                basis_I, basis_Q = get_bases(tau)
+                A_matrix = np.vstack([basis_I, basis_Q]).T
+                # lstsq returns the sum of squared residuals if `b` is a vector
+                _, res, _, _ = np.linalg.lstsq(A_matrix, v_main_ac, rcond=None)
+                # The residual is an array of size 1, so I extract the scalar
+                return res[0] if res.size > 0 else np.inf
+
+            # --- Perform the 1D optimization for tau ---
+            tau_bracket = (current_tau_guess * 0.8, current_tau_guess * 1.2) if current_tau_guess != 0 else (-1e-9, 1e-9)
+            res_tau = minimize_scalar(outer_loop_cost, bracket=tau_bracket, method='brent')
+            tau_fit = res_tau.x
+            
+            # --- Perform the final linear fit with the optimal tau ---
+            basis_I_final, basis_Q_final = get_bases(tau_fit)
+            A_matrix_final = np.vstack([basis_I_final, basis_Q_final]).T
+            p_final, final_res, _, _ = np.linalg.lstsq(A_matrix_final, v_main_ac, rcond=None)
+            Ip_fit, Qp_fit = p_final
+            
+            # --- Recover physical parameters ---
+            C_fit = np.sqrt(Ip_fit**2 + Qp_fit**2)
+            phi_fit = np.arctan2(-Qp_fit, Ip_fit)
+            
+            # The concept of 'm' is less central here, but I'll calculate it
+            # for consistency with the DeepFitObject data structure.
+            m_effective = np.ptp(phi_main_template - np.interp(time_axis_buffer - tau_fit, time_axis_buffer, phi_main_template)) / 2.0
+            
+            # There is no 'psi' parameter in this model. It's absorbed into the
+            # witness measurement. I will set it to zero.
+            psi_fit = 0.0
+            
+            # Update guess for next buffer for warm start
+            current_tau_guess = tau_fit
+
+            results_list.append({
+                'amp': C_fit, 'm': m_effective, 'phi': phi_fit, 'psi': psi_fit,
+                'dc': np.mean(main_buffer_raw),
+                'ssq': final_res[0] if final_res.size > 0 else 0.0,
+                'fitok': 1, # minimize_scalar doesn't have a success flag like minimize
+                'tau': tau_fit # I'll also store the direct result for tau
+            })
+            
         return pd.DataFrame(results_list)
