@@ -1,11 +1,11 @@
 from . import core as dfm
 from .physics import LaserConfig, InterferometerConfig
 
-from typing import Optional
-import numpy as np
-from tqdm import tqdm
-import multiprocessing
 import os
+import numpy as np
+import multiprocessing
+from typing import Optional, Callable, Any
+from tqdm import tqdm
 
 def run_single_trial(
     laser_config: LaserConfig,
@@ -96,11 +96,12 @@ def run_single_trial(
     return fit_obj
 
 def run_monte_carlo(
-    worker_func,
+    worker_func: Callable,
     n_trials: int,
     static_params: dict,
-    dynamic_params_generator,
-    n_cores: Optional[int] = None
+    dynamic_params_generator: Callable,
+    n_cores: Optional[int] = None,
+    verbose: bool = True
 ) -> np.ndarray:
     """
     Runs a parallel Monte Carlo simulation by repeatedly calling a worker.
@@ -126,6 +127,8 @@ def run_monte_carlo(
     n_cores : int, optional
         The number of CPU cores to use for parallel execution. If None,
         defaults to all available cores.
+    verbose : bool, optional
+        If True, a tqdm progress bar is displayed. Defaults to True.
 
     Returns
     -------
@@ -147,13 +150,16 @@ def run_monte_carlo(
         all_jobs.append(job_params)
 
     # --- 2. Run the Simulations in Parallel ---
-    print(f"Starting Monte Carlo run with {len(all_jobs)} trials on {n_cores} cores...")
+    if verbose:
+        print(f"Starting Monte Carlo run with {len(all_jobs)} trials on {n_cores} cores...")
     
-    # The 'if __name__ == "__main__"` guard is critical for scripts,
-    # but since this is a library, we rely on the caller to use it.
     with multiprocessing.Pool(processes=n_cores) as pool:
         results_iterator = pool.imap(worker_func, all_jobs)
-        # Use tqdm to show a progress bar for the parallel execution
-        all_results = list(tqdm(results_iterator, total=len(all_jobs), desc="Monte Carlo Trials"))
+        
+        # Conditionally wrap the iterator with tqdm for a progress bar
+        if verbose:
+            all_results = list(tqdm(results_iterator, total=len(all_jobs), desc="Monte Carlo Trials"))
+        else:
+            all_results = list(results_iterator)
 
     return np.array(all_results)

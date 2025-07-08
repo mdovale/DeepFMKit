@@ -1,6 +1,7 @@
 from .experiments import *
-
+from .physics import *
 import DeepFMKit.core as dfm
+
 import numpy as np
 import scipy.constants as sc
 
@@ -100,6 +101,76 @@ def run_efficiency_trial(params: dict) -> float:
         return fit_obj.m[0]
     else:
         return np.nan
+    
+def calculate_wdfmi_vs_dfmi_bias(params: dict) -> tuple:
+    """
+    Worker for comparing W-DFMI and standard NLS bias on one distorted signal.
+
+    For a single trial, this worker simulates one instance of a DFMI signal
+    with a specific amplitude and phase of modulation non-linearity. It then
+    fits this identical signal with two different algorithms:
+    1. The W-DFMI Orthogonal Fitter, which uses a witness channel.
+    2. The standard NLS Fitter, which does not.
+
+    It returns the bias (`m_fit` - `m_true`) from each fit, allowing for a
+    direct comparison of their performance under distortion.
+
+    Parameters
+    ----------
+    params : dict
+        A dictionary containing all parameters for this single trial.
+        - 'laser_config': A configured LaserConfig object (including distortion).
+        - 'main_ifo_config': A configured InterferometerConfig object.
+        - 'm_main': The ground-truth modulation depth.
+        - 'm_witness': The target modulation depth for the witness.
+        - 'ndata': The number of harmonics for the NLS fit.
+
+    Returns
+    -------
+    tuple
+        A tuple (wdfmi_bias, dfmi_bias).
+    """
+    # Unpack parameters from the input dictionary
+    laser_config = params['laser_config']
+    main_ifo_config = params['main_ifo_config']
+    m_main_target = params['m_main']
+    m_witness_target = params['m_witness']
+    ndata = params['ndata']
+
+    # --- 1. Configure the Trial ---
+    dff = dfm.DeepFitFramework()
+    main_label = "main"
+    main_channel = dfm.DFMIObject(main_label, laser_config, main_ifo_config)
+    dff.sims[main_label] = main_channel
+
+    # Use the helper to create a perfectly configured witness channel
+    witness_label = "witness"
+    dff.create_witness_channel(
+        main_channel_label=main_label,
+        witness_channel_label=witness_label,
+        m_witness=m_witness_target
+    )
+
+    # --- 2. Simulate ---
+    # A single buffer simulation is sufficient to measure the bias.
+    n_seconds = main_channel.fit_n / laser_config.f_mod
+    dff.simulate(main_label, n_seconds=n_seconds, witness_label=witness_label)
+
+    # --- 3. Fit with both methods and calculate bias---
+    wdfmi_bias = np.nan
+    dfmi_bias = np.nan
+
+    # Fit with W-DFMI Orthogonal Fitter
+    fit_wdfmi = dff.fit(main_label, method='wdfmi_ortho', witness_label=witness_label, verbose=False)
+    if fit_wdfmi and fit_wdfmi.m.size > 0:
+        wdfmi_bias = fit_wdfmi.m[0] - m_main_target
+
+    # Fit with standard NLS Fitter
+    fit_dfmi = dff.fit(main_label, method='nls', ndata=ndata, verbose=False, parallel=False)
+    if fit_dfmi and fit_dfmi.m.size > 0:
+        dfmi_bias = fit_dfmi.m[0] - m_main_target
+
+    return wdfmi_bias, dfmi_bias
 
 def calculate_single_distortion_bias(params):
     """
@@ -287,13 +358,11 @@ def calculate_stat_sys_tradeoff(params):
         num_points_for_interp = min(int(T_acq * f_samp_noise), len(phi_drift_t_long))
         if num_points_for_interp < 2: num_points_for_interp = 2
         
-        # --- THE FIX IS HERE ---
         # The source time axis must be rescaled to match the duration of the
         # short fit buffer. This "compresses" the long noise profile into the
         # short buffer, preserving its statistical magnitude (variance).
         t_source_rescaled = np.linspace(0, T_fit_buffer, num=num_points_for_interp)
         phi_drift_stitched = np.interp(t_fit_buffer, t_source_rescaled, phi_drift_t_long[:num_points_for_interp])
-        # --- END OF FIX ---
 
         # Step 5: Manually reconstruct the signal using the EXACT physics model
         omega_mod = 2 * np.pi * laser_config.f_mod
@@ -420,6 +489,144 @@ def calculate_bias_for_point(params):
     worst_wdfmi_bias = np.max(np.abs(wdfmi_biases_arr))
     
     return (grid_i, grid_j, mean_std_bias, worst_std_bias, mean_wdfmi_bias, worst_wdfmi_bias)
+
+def calculate_wdfmi_intrinsic_bias(params: dict) -> float:
+    """
+    Worker to calculate W-DFMI bias for a single, non-distorted trial.
+
+    This worker is designed to measure the intrinsic bias of a W-DFMI fitter
+    for a specific set of physical parameters (m_main, m_witness, and
+    witness_ifo_phase). It respects the physical constraints of the system by
+    adjusting the laser's `df` and the witness's path length to achieve the
+    target modulation depths.
+
+    Parameters
+    ----------
+    params : dict
+        A dictionary containing all parameters for this single trial:
+        - 'm_main': Target modulation depth for the main channel.
+        - 'm_witness': Target modulation depth for the witness channel.
+        - 'witness_ifo_phase': The absolute phase offset of the witness
+          interferometer in radians. This allows for testing off-quadrature effects.
+
+    Returns
+    -------
+    float
+        The calculated bias (`m_fit` - `m_true`) for this single trial.
+    """
+    # Unpack parameters from the input dictionary
+    m_main_target = params['m_main']
+    m_witness_target = params['m_witness']
+    witness_ifo_phase = params['witness_ifo_phase']
+
+    dff = dfm.DeepFitFramework()
+
+    # --- 1. Configure the shared laser and main interferometer ---
+    laser_config = LaserConfig()
+    main_ifo_config = InterferometerConfig(label="main_ifo")
+    
+    # Ensure no signal distortion for this intrinsic bias test
+    laser_config.df_2nd_harmonic_frac = 0.0
+    
+    # Calculate laser `df` to achieve the target m_main
+    opd_main = main_ifo_config.meas_arml - main_ifo_config.ref_arml
+    if opd_main == 0: return np.nan
+    laser_config.df = (m_main_target * sc.c) / (2 * np.pi * opd_main)
+    
+    main_label = "main"
+    main_channel = dfm.DFMIObject(main_label, laser_config, main_ifo_config)
+    dff.sims[main_label] = main_channel
+
+    # --- 2. Design the Witness Interferometer ---
+    # Adjust witness OPD to achieve the target m_witness with the current `df`
+    witness_label = "witness"
+    opd_witness = (m_witness_target * sc.c) / (2 * np.pi * laser_config.df)
+
+    witness_ifo_config = InterferometerConfig(label="witness_ifo")
+    witness_ifo_config.ref_arml = 0.01
+    witness_ifo_config.meas_arml = witness_ifo_config.ref_arml + opd_witness
+    # Set the IFO phase directly from the input parameter
+    witness_ifo_config.phi = witness_ifo_phase
+
+    witness_channel = dfm.DFMIObject(witness_label, laser_config, witness_ifo_config)
+    dff.sims[witness_label] = witness_channel
+
+    # --- 3. Simulate and Fit ---
+    n_seconds = main_channel.fit_n / laser_config.f_mod
+    dff.simulate(main_label, n_seconds=n_seconds, witness_label=witness_label, mode='asd')
+    
+    fit_obj = dff.fit(main_label, method='wdfmi_ortho', witness_label=witness_label, verbose=False)
+    
+    bias = np.nan
+    if fit_obj and fit_obj.m.size > 0:
+        bias = fit_obj.m[0] - m_main_target
+        
+    return bias
+
+def setup_distortion_trial(params: dict) -> dict:
+    """
+    Configures laser and IFO objects for a single distortion bias trial.
+    """
+    m_main = params['m_main']
+    m_witness = params['m_witness']
+    epsilon = params['distortion_amp']
+    distortion_phase = params['distortion_phase']
+
+    laser_config = LaserConfig()
+    main_ifo_config = InterferometerConfig()
+    witness_ifo_config = InterferometerConfig()
+
+    opd_main = main_ifo_config.meas_arml - main_ifo_config.ref_arml
+    if opd_main == 0: opd_main = 0.2 # Default value if zero
+    laser_config.df = (m_main * sc.c) / (2 * np.pi * opd_main)
+    
+    if laser_config.df > 0:
+        opd_witness = (m_witness * sc.c) / (2 * np.pi * laser_config.df)
+    else:
+        opd_witness = 0.0
+        
+    witness_ifo_config.ref_arml = 0.01
+    witness_ifo_config.meas_arml = witness_ifo_config.ref_arml + opd_witness
+    
+    f0 = sc.c / laser_config.wavelength
+    static_fringe_phase = (2 * np.pi * f0 * opd_witness) / sc.c
+    witness_ifo_config.phi = (np.pi / 2.0) - static_fringe_phase
+    
+    laser_config.df_2nd_harmonic_frac = epsilon
+    laser_config.df_2nd_harmonic_phase = distortion_phase
+    
+    return {
+        'laser_config': laser_config,
+        'main_ifo_config': main_ifo_config,
+        'witness_ifo_config': witness_ifo_config
+    }
+
+def get_random_distortion_phase() -> float:
+    """Returns a random phase, for use as a stochastic variable."""
+    return np.random.uniform(0, 2 * np.pi)
+
+def extract_bias(fit_obj, params: dict) -> float:
+    """Extracts the bias (m_fit - m_true) from a fit result."""
+    if fit_obj and fit_obj.m.size > 0:
+        return fit_obj.m[0] - params['m_main']
+    return np.nan
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def calculate_bias_for_m_vs_mwitness(params):
     """
