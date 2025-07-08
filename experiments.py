@@ -1,5 +1,4 @@
-# Import DeepFMKit components
-from . import core as dfm
+from DeepFMKit import core as dfm
 from .physics import *
 
 import numpy as np
