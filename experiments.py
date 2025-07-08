@@ -166,62 +166,27 @@ def run_monte_carlo(
 
     return np.array(all_results)
 
-def generic_trial_setup(params: dict) -> dict:
-    """
-    Configures physics objects based on a parameter dictionary and a mapping.
-    
-    This single, generic function replaces all previous `setup_...` functions.
-    It creates the config objects, performs fixed physical calculations, and then
-    dynamically sets attributes on the config objects based on the provided map.
-    """
-    param_map = params['__param_map__']
-    
-    # Create base configurations
-    configs = {
-        'laser_config': LaserConfig(),
-        'main_ifo_config': InterferometerConfig(),
-        'witness_ifo_config': InterferometerConfig()
-    }
-
-    # Perform fixed, common calculations first
-    if 'm_target' in params and 'opd' in params:
-        opd = params['opd']
-        m_target = params['m_target']
-        if opd > 0:
-            configs['laser_config'].df = (m_target * dfm.sc.c) / (2 * np.pi * opd)
-    
-    # Dynamically set attributes using the map
-    for param_name, mapping in param_map.items():
-        if param_name in params:
-            target_obj_name = mapping['target_object']
-            target_attribute = mapping['target_attribute']
-            setattr(configs[target_obj_name], target_attribute, params[param_name])
-            
-    return configs
-
 def _execute_single_trial_worker(job_params: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Executes a single, fully-defined simulation and analysis trial.
-    This worker is completely generic and data-driven.
+    Executes a single simulation trial with pre-configured physics objects.
     """
-    params = job_params['params']
+    # Unpack the job description
+    laser_config = job_params['laser_config']
+    main_ifo_config = job_params['main_ifo_config']
+    witness_ifo_config = job_params.get('witness_ifo_config') # Optional
+    
     analyses = job_params['analyses']
     grid_indices = job_params['grid_indices']
     trial_idx = job_params['trial_idx']
 
-    # Setup Physics
-    configs = generic_trial_setup(params)
-    laser_config, main_ifo_config, witness_ifo_config = \
-        configs['laser_config'], configs['main_ifo_config'], configs.get('witness_ifo_config')
-
-    # Simulate
+    # --- 1. Simulate (no setup needed here) ---
     dff = dfm.DeepFitFramework()
     main_label = "main"
     main_channel = dfm.DFMIObject(main_label, laser_config, main_ifo_config)
     dff.sims[main_label] = main_channel
 
     witness_label = None
-    if any('wdfmi' in a['fitter'] for a in analyses.values()):
+    if witness_ifo_config:
         witness_label = "witness"
         witness_channel = dfm.DFMIObject(witness_label, laser_config, witness_ifo_config)
         dff.sims[witness_label] = witness_channel
@@ -229,7 +194,7 @@ def _execute_single_trial_worker(job_params: Dict[str, Any]) -> Dict[str, Any]:
     n_seconds = main_channel.fit_n / laser_config.f_mod
     dff.simulate(main_label, n_seconds=n_seconds, witness_label=witness_label)
 
-    # Run all defined analyses
+    # --- 2. Run all defined analyses ---
     results = {'grid_indices': grid_indices, 'trial_idx': trial_idx}
     fit_param_names = ['m', 'phi', 'psi', 'amp', 'ssq', 'dc']
 
@@ -242,7 +207,6 @@ def _execute_single_trial_worker(job_params: Dict[str, Any]) -> Dict[str, Any]:
             
         fit_obj = dff.fit(main_label, method=fitter_method, verbose=False, **fitter_kwargs)
         
-        # NEW: Automatically extract all standard fit parameters
         if fit_obj:
             analysis_results = {p: getattr(fit_obj, p)[0] for p in fit_param_names if hasattr(fit_obj, p) and getattr(fit_obj, p).size > 0}
             results[analysis_name] = analysis_results
@@ -254,20 +218,20 @@ def _execute_single_trial_worker(job_params: Dict[str, Any]) -> Dict[str, Any]:
 class Experiment:
     """
     A declarative framework for designing and running complex simulations.
+    This version uses a user-provided factory function to configure the physics.
     """
     def __init__(self, description: str = ""):
         self.description = description
         self.axes: Dict[str, np.ndarray] = {}
         self.static_params: Dict[str, Any] = {}
         self.stochastic_vars: Dict[str, Callable] = {}
-        self.param_map: Dict[str, Dict] = {}
         self.n_trials: int = 1
         self.analyses: Dict[str, Dict] = {}
+        self.config_factory: Optional[Callable] = None
         self.results: Optional[Dict[str, Any]] = None
 
     def add_axis(self, name: str, values: List[Any]):
         """Defines an independent variable for the experiment grid."""
-        if len(self.axes) >= 3: raise ValueError("Supports a maximum of 3 axes.")
         self.axes[name] = np.asarray(values)
 
     def set_static(self, params_dict: Dict[str, Any]):
@@ -277,37 +241,58 @@ class Experiment:
     def add_stochastic_variable(self, name: str, distribution_func: Callable):
         """Defines a variable to be randomized for each Monte Carlo trial."""
         self.stochastic_vars[name] = distribution_func
+        
+    def set_config_factory(self, func: Callable):
+        """
+        Sets the user-defined function that creates the physics configs.
 
-    def map_parameter(self, name: str, target_object: str, target_attribute: str):
-        """Maps an experiment parameter to an attribute on a physics config object."""
-        self.param_map[name] = {'target_object': target_object, 'target_attribute': target_attribute}
+        This function must accept a single dictionary of parameters for one
+        trial and return a dictionary containing the configured
+        'laser_config' and 'main_ifo_config' objects.
+        """
+        self.config_factory = func
 
     def add_analysis(self, name: str, fitter_method: str, fitter_kwargs: Optional[dict] = None):
-        """Defines an analysis (a specific fitter run) to perform on each trial."""
+        """Defines an analysis to perform on each trial."""
         self.analyses[name] = {'fitter': fitter_method, 'kwargs': fitter_kwargs or {}}
         
     def run(self, n_cores: Optional[int] = None, verbose: bool = True):
         """Executes the entire defined experiment in parallel."""
-        if not self.analyses: raise ValueError("At least one analysis must be added.")
-        if n_cores is None: n_cores = os.cpu_count()
+        if self.config_factory is None:
+            raise ValueError("A configuration factory must be set using .set_config_factory()")
+        if not self.analyses:
+            raise ValueError("At least one analysis must be added using .add_analysis()")
+        if n_cores is None:
+            n_cores = os.cpu_count()
 
         job_grid = list(itertools.product(*self.axes.values()))
         all_jobs = []
         for grid_idx, grid_point_values in enumerate(job_grid):
             for trial_idx in range(self.n_trials):
+                # Build the complete parameter set for this trial
                 params = dict(zip(list(self.axes.keys()), grid_point_values))
                 params.update(self.static_params)
-                for name, func in self.stochastic_vars.items(): params[name] = func()
-                params['__param_map__'] = self.param_map
-                all_jobs.append({'analyses': self.analyses, 'params': params, 'grid_indices': grid_idx, 'trial_idx': trial_idx})
+                for name, func in self.stochastic_vars.items():
+                    params[name] = func()
+                
+                # Use the user's factory to get the configured physics objects
+                configs = self.config_factory(params)
+
+                all_jobs.append({
+                    **configs, # Unpack laser_config, main_ifo_config, etc.
+                    'analyses': self.analyses,
+                    'grid_indices': grid_idx,
+                    'trial_idx': trial_idx
+                })
         
         if verbose: print(f"Running experiment '{self.description}' with {len(all_jobs)} total trials...")
-
+        
         with multiprocessing.Pool(processes=n_cores) as pool:
             results_iterator = pool.imap(_execute_single_trial_worker, all_jobs)
             if verbose: flat_results = list(tqdm(results_iterator, total=len(all_jobs), desc="Executing Trials"))
             else: flat_results = list(results_iterator)
 
+        # Result aggregation logic remains the same
         self.results = {'axes': self.axes}
         grid_shape = [len(v) for v in self.axes.values()]
         fit_param_names = ['m', 'phi', 'psi', 'amp', 'ssq', 'dc']
