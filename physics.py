@@ -1,11 +1,14 @@
 from .data import DeepRawObject
+from .plotting import default_rc
 
 import numpy as np
 import scipy.constants as sc
 import pyplnoise
 import pandas as pd
 import logging
-from typing import Optional
+import matplotlib.pyplot as plt
+plt.rcParams.update(default_rc)
+from typing import Callable, Optional, Dict, Any
 
 class LaserConfig:
     """
@@ -33,6 +36,12 @@ class LaserConfig:
         self.f_mod = 1000
         self.df = 3e9
         self.psi = psi if psi else 0.0
+
+        # A callable that generates the unitless modulation waveform.
+        # It must accept a time axis and a phase offset as arguments.
+        self.waveform_func: Callable[[np.ndarray, float], np.ndarray] = lambda t_phase: np.cos(t_phase)
+        # An optional dictionary for extra arguments to the waveform function
+        self.waveform_kwargs: Dict[str, Any] = {}
         
         # --- Noise Properties ---
         self.f_n = 0.0      # Frequency noise ASD (Hz/sqrt(Hz) @ 1 Hz)
@@ -40,8 +49,69 @@ class LaserConfig:
         self.amp_n = 0.0    # Amplitude noise ASD
         
         # --- Systematic Error Properties ---
-        self.df_2nd_harmonic_frac = 0.0
-        self.df_2nd_harmonic_phase = 0.0
+        # self.df_2nd_harmonic_frac = 0.0
+        # self.df_2nd_harmonic_phase = 0.0
+
+    def plot(self, n_cycles=3, n_points_per_cycle=1000):
+        """
+        Visualizes the configured modulation waveform over a few cycles.
+
+        This method generates and plots two key functions derived from the
+        `waveform_func`:
+        1. The unitless frequency modulation waveform, g(t).
+        2. The resulting phase modulation waveform, phi_mod(t), scaled by df.
+
+        This is an essential tool for verifying the behavior of custom
+        waveform functions before using them in a simulation.
+
+        Parameters
+        ----------
+        n_cycles : int, optional
+            The number of modulation cycles to plot. Defaults to 3.
+        n_points_per_cycle : int, optional
+            The number of points to use for rendering each cycle, affecting
+            the smoothness of the plot. Defaults to 1000.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The figure object containing the plot.
+        """
+        # --- 1. Setup Time and Phase Axes ---
+        duration = n_cycles / self.f_mod
+        n_total_points = n_cycles * n_points_per_cycle
+        time_axis = np.linspace(0, duration, n_total_points, endpoint=False)
+        omega_mod = 2 * np.pi * self.f_mod
+        phase_axis = omega_mod * time_axis + self.psi
+
+        # --- 2. Generate Waveforms using the stored function ---
+        g_t = self.waveform_func(phase_axis, **self.waveform_kwargs)
+        
+        # I'll scale the phase modulation by df for physical units
+        dt = time_axis[1] - time_axis[0]
+        phi_mod = 2 * np.pi * self.df * np.cumsum(g_t) * dt
+        
+        # --- 3. Create the Plot ---
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+        
+        # Plot 1: Frequency Modulation
+        ax1.plot(time_axis * 1000, g_t, label='g(t)')
+        ax1.set_title(f"Laser Modulation Waveform: '{self.label}'")
+        ax1.set_ylabel("Frequency Mod. [a.u.]")
+        ax1.grid(True, linestyle='--', alpha=0.6)
+        ax1.legend()
+        
+        # Plot 2: Phase Modulation
+        ax2.plot(time_axis * 1000, phi_mod, label='$\\phi_{mod}(t)$')
+        ax2.set_xlabel("Time (ms)")
+        ax2.set_ylabel("Phase Mod. (rad)")
+        ax2.grid(True, linestyle='--', alpha=0.6)
+        ax2.legend()
+        
+        plt.tight_layout()
+        fig.align_ylabels()
+        
+        return ax1, ax2
 
 class InterferometerConfig:
     """
@@ -444,11 +514,10 @@ class SignalGenerator:
         omega_mod = 2 * np.pi * laser.f_mod
 
         # Construct the normalized, unitless frequency modulation waveform g(t)
-        g_t = np.cos(omega_mod * time_axis + laser.psi)
-        if laser.df_2nd_harmonic_frac != 0:
-            eps = laser.df_2nd_harmonic_frac
-            theta_eps = laser.df_2nd_harmonic_phase
-            g_t += eps * np.cos(2 * omega_mod * time_axis + laser.psi + theta_eps)
+        # by calling the function stored in the laser config.
+        phase_axis = omega_mod * time_axis + laser.psi
+        g_t = laser.waveform_func(phase_axis, **laser.waveform_kwargs)
+
         g_t_normalized = g_t / np.max(np.abs(g_t))
         
         # --- 2. Construct True Phase Modulation Waveform phi_mod(t) ---

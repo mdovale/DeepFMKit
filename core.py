@@ -458,6 +458,7 @@ class DeepFitFramework():
             'wdfmi_nls': WDFMI_NLSFitter,
             'wdfmi_ortho': WDFMI_OrthogonalFitter,
             'wdfmi_seq': WDFMI_SequentialFitter,
+            'hwdfmi': HWDFMI_Fitter
         }
         if method not in fitter_map:
             logging.error(f"Unknown fit method: '{method}'. Available: {list(fitter_map.keys())}"); return
