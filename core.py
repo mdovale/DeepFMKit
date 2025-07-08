@@ -381,6 +381,7 @@ class DeepFitFramework():
         fit.ssq = df['ssq'].to_numpy()
         fit.amp = df['amp'].to_numpy()
         fit.m   = df['m'].to_numpy()
+        fit.tau = df['tau'].to_numpy()
         fit.phi = df['phi'].to_numpy()
         fit.psi = df['psi'].to_numpy()
         fit.dc  = df['dc'].to_numpy()
@@ -506,6 +507,9 @@ class DeepFitFramework():
             logging.error(f"{FitterClass.__name__} returned no results.")
             return None
         
+        if method in ['nls', 'ekf']:
+            results_df['tau'] = results_df['m'] / (2*np.pi*main_raw.sim.laser.df) if main_raw.sim else 0.0
+
         self.fits_df[fit_label] = results_df
         
         fit_obj = self._create_fit_object_from_df(

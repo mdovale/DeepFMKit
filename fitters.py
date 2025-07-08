@@ -536,7 +536,7 @@ class WDFMI_NLSFitter(BaseFitter):
             current_guess = fit_parm
             
             results_list.append({
-                'amp': C_fit, 'm': m_fit, 'phi': phi_fit, 'psi': psi_fit, 
+                'amp': C_fit, 'm': m_fit, 'phi': phi_fit, 'psi': psi_fit, 'tau': tau_fit,
                 'dc': np.mean(main_buffer_raw),
                 'ssq': np.sum(opt_result.fun**2), 'fitok': 1 if opt_result.success else 0
             })
@@ -613,7 +613,7 @@ class WDFMI_OrthogonalFitter(BaseFitter):
             current_guess = np.array([tau_fit, psi_fit])
 
             results_list.append({
-                'amp': C_fit, 'm': m_fit, 'phi': phi_fit, 'psi': psi_fit,
+                'amp': C_fit, 'm': m_fit, 'phi': phi_fit, 'psi': psi_fit, 'tau': tau_fit,
                 'dc': np.mean(main_buffer_raw),
                 'ssq': final_res[0] if final_res.size > 0 else 0,
                 'fitok': 1 if opt_result.success else 0
@@ -741,7 +741,7 @@ class WDFMI_SequentialFitter(BaseFitter):
             m_fit = 2 * np.pi * laser_cfg.df * tau_fit
             
             results_list.append({
-                'amp': C_fit, 'm': m_fit, 'phi': phi_fit, 'psi': psi_fit,
+                'amp': C_fit, 'm': m_fit, 'phi': phi_fit, 'psi': psi_fit, 'tau': tau_fit,
                 'dc': np.mean(main_buffer_raw),
                 'ssq': final_res[0] if final_res.size > 0 else 0.0,
                 'fitok': 1
@@ -858,11 +858,10 @@ class HWDFMI_Fitter(BaseFitter):
             current_tau_guess = tau_fit
 
             results_list.append({
-                'amp': C_fit, 'm': m_effective, 'phi': phi_fit, 'psi': psi_fit,
+                'amp': C_fit, 'm': m_effective, 'phi': phi_fit, 'psi': psi_fit, 'tau': tau_fit,
                 'dc': np.mean(main_buffer_raw),
                 'ssq': final_res[0] if final_res.size > 0 else 0.0,
-                'fitok': 1, # minimize_scalar doesn't have a success flag like minimize
-                'tau': tau_fit # I'll also store the direct result for tau
+                'fitok': 1 # minimize_scalar doesn't have a success flag like minimize
             })
             
         return pd.DataFrame(results_list)

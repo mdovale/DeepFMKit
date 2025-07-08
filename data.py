@@ -140,6 +140,7 @@ class DeepFitObject():
         self.ssq  = np.array([])   # Fit sum of squares
         self.amp  = np.array([])   # Fit amplitude
         self.m    = np.array([])   # Fit effective modulation index
+        self.tau  = np.array([])   # Fit time delay (L/c)
         self.phi  = np.array([])   # Fit interferometric phase
         self.psi  = np.array([])   # Fit modulation phase
         self.dc   = np.array([])   # Fit dc level
