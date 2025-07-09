@@ -348,57 +348,80 @@ class StandardNLSFitter(BaseFitter):
         n = self.config['n']
         ndata = self.config.get('ndata', 10)
         
+        # --- THIS IS THE KEY CHANGE ---
+        # The mode of operation is now controlled by a kwarg.
+        parallel = kwargs.get('parallel', True)
+
         init_a = kwargs.get('init_a', 1.6)
         init_m = kwargs.get('init_m', 6.0)
         init_psi = kwargs.get('init_psi', 0.0)
-        init_psi_method = kwargs.get('init_psi_method', None)
-        n_cores = kwargs.get('n_cores', None)
         
-        R, fs, nbuf = _calculate_fit_params(main_raw, n)
+        R, _, nbuf = _calculate_fit_params(main_raw, n)
         if nbuf == 0: return pd.DataFrame()
 
+        if parallel:
+            return self._fit_parallel(main_raw, R, nbuf, ndata, init_a, init_m, init_psi, **kwargs)
+        else:
+            return self._fit_sequential(main_raw, R, nbuf, ndata, init_a, init_m, init_psi)
+
+    def _fit_sequential(self, main_raw, R, nbuf, ndata, init_a, init_m, init_psi):
+        """Runs the fit sequentially, buffer by buffer."""
+        logging.debug(f"Processing '{main_raw.label}' sequentially with StandardNLSFitter...")
+        current_guess = np.array([init_a, init_m, 0.0, init_psi])
+        results_list = []
+        raw_data_full = main_raw.data.values.reshape(-1, R)
+        w0 = 2. * np.pi * main_raw.f_mod / main_raw.f_samp
+        
+        for b in range(nbuf):
+            raw_buffer = raw_data_full[b]
+            QI_data_mean = np.zeros(2 * ndata)
+            for i in range(ndata):
+                Q, I = calculate_quadratures(i, raw_buffer, w0)
+                QI_data_mean[i] = Q.mean()
+                QI_data_mean[i + ndata] = I.mean()
+            
+            status, fit_parm, fit_ssq = fit(ndata, QI_data_mean, current_guess)
+            current_guess = fit_parm
+            
+            results_list.append({
+                'amp': fit_parm[0], 'm': fit_parm[1], 'phi': fit_parm[2], 'psi': fit_parm[3],
+                'dc': np.mean(raw_buffer), 'ssq': fit_ssq, 'fitok': status
+            })
+        return pd.DataFrame(results_list)
+
+    def _fit_parallel(self, main_raw, R, nbuf, ndata, init_a, init_m, init_psi, **kwargs):
+        """Runs the fit in parallel using a multiprocessing Pool."""
+        n_cores = kwargs.get('n_cores', None)
         if n_cores is None: n_cores = os.cpu_count()
         n_cores = min(n_cores, nbuf)
 
-        logging.debug(f"Processing '{main_raw.label}' with StandardNLSFitter using {n_cores} cores...")
-
-        # --- 1. Seeding: Get a single good initial guess ---
-        if init_psi_method:
-            psi = self._psi_init(main_raw, init_psi_method, init_a, init_m, R, ndata)
-        else:
-            psi = init_psi
-
-        seed_guess = np.array([init_a, init_m, 0.0, psi])
+        logging.debug(f"Processing '{main_raw.label}' in parallel with StandardNLSFitter using {n_cores} cores...")
+        
+        # Seeding: Get a single good initial guess from the first buffer
+        seed_guess = np.array([init_a, init_m, 0.0, init_psi])
         first_fit_result = self._fit_single_buffer(main_raw, 0, R, ndata, seed_guess)
         
-        # Use the result of the first fit as the warm start for all parallel workers
         seed_guess = np.array([
             first_fit_result['amp'], first_fit_result['m'], 
             first_fit_result['phi'], first_fit_result['psi']
         ])
         
-        # --- 2. Chunking: Split the raw data for each core ---
         raw_data_full = main_raw.data.values.reshape(-1, R)
-        if nbuf == 1:
-             chunks = [] # No more chunks to process
-        else:
-             chunks = np.array_split(raw_data_full[1:], n_cores) 
-        
-        # --- 3. Prepare Jobs for Multiprocessing ---
+        if nbuf <= 1:
+            return pd.DataFrame([first_fit_result])
+
+        chunks = np.array_split(raw_data_full[1:], n_cores) 
         job_args = [(chunk, seed_guess, R, ndata, main_raw.f_mod, main_raw.f_samp) 
                     for chunk in chunks if chunk.size > 0]
         
-        # --- 4. Run the Pool ---
         chunk_results_list = []
         if job_args:
             with Pool(n_cores) as p:
                 chunk_results_list = list(tqdm(p.imap(_process_fit_chunk, job_args), total=len(job_args), desc="Parallel Fit"))
         
-        # --- 5. Stitch Results ---
         final_results = [first_fit_result]
         for chunk_res in chunk_results_list:
             final_results.extend(chunk_res)
-            
         return pd.DataFrame(final_results)
 
     def _fit_single_buffer(self, main_raw, b, R, ndata, initial_guess):

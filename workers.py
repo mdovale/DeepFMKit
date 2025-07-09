@@ -27,9 +27,8 @@ def calculate_ambiguity_boundary_point(params):
     tuple
         (grid_i, grid_j, coarse_phase_error)
     """
-    # This worker is purely computational, no need for DFF.
     delta_f = params['delta_f']
-    delta_m = params['delta_m']
+    delta_l = params['delta_l']
     f0 = params['f0']
     grid_i = params['grid_i']
     grid_j = params['grid_j']
@@ -38,7 +37,7 @@ def calculate_ambiguity_boundary_point(params):
     if delta_f == 0:
         return (grid_i, grid_j, float('inf'))
         
-    coarse_phase_error = -delta_m * (f0 / delta_f)
+    coarse_phase_error = -2*np.pi*(delta_l / sc.c) * (f0 / delta_f)
     
     return (grid_i, grid_j, np.abs(coarse_phase_error))
 
