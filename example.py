@@ -3,24 +3,16 @@ from DeepFMKit.core import DeepFitFramework
 def main():
 
     print("Program start!")
+    print("Loading raw data from \'/test/raw_data.txt\'...")
 
-    dff = DeepFitFramework()
+    dff = DeepFitFramework(raw_file='./test/raw_data.txt', raw_labels=['ch1'])
 
-    label = "dynamic"
-    dff.new_sim(label)
-    dff.sims[label].m = 6.0
-    dff.sims[label].f_mod = 1000
-    dff.sims[label].f_samp = int(200e3)
-    dff.sims[label].f_n = 1e6
-    dff.sims[label].arml_mod_f = 1.0
-    dff.sims[label].arml_mod_amp = 1e-9
-    dff.sims[label].arml_mod_n = 1e-12
-    dff.sims[label].fit_n = 10
+    print(f"Added DeepRawObject to \'raws\' dictionary: {dff.raws}")
+    print("Fitting...")
 
-    dff.simulate(label, n_seconds=3, simulate="dynamic", ref_channel=False)
+    dff.fit('ch1', method='nls', n=20, parallel=False)
 
-    dff.fit(label)
-
+    print(f"Added DeepFitObject to \'fits\' dictionary: {dff.fits}")
     print("Done.")
 
 if __name__ == '__main__':
