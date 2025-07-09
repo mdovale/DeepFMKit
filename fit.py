@@ -45,9 +45,8 @@ def calculate_quadratures(n, data, w0):
 
     Notes
     -----
-    This implementation is vectorized using NumPy for high performance,
-    avoiding explicit Python loops. The mean of the returned Q and I arrays
-    gives the final I/Q value for the specified harmonic over the buffer.
+    The mean of the returned Q and I arrays gives the final I/Q value 
+    for the specified harmonic over the buffer.
     """
     # Ensure data is a NumPy array for efficient operations
     data = np.asarray(data)
@@ -112,13 +111,8 @@ def coeffs(ndata, data, param):
     # --- 3. Calculate the model values for all harmonics at once ---
     common_term = a * phase_term * bessel_j
     model_q = common_term * cos_jpsi
-    model_i = common_term * sin_jpsi  # Note: The original had (-1)*sin, this was an error in my analysis.
-                                      # The correct model is I = A * cos(phi+n*pi/2)*J_n*sin(n*psi)
-                                      # Let's double check the original C-style code.
-                                      # ydiff = data[i] - a * sincos[j % 4] * jv(j, m) * (-1) * sin(j * psi)
-                                      # The (-1) * sin() suggests model_i = -common_term * sin_jpsi.
-                                      # Let's stick to the original code's formula precisely.
-    model_i = -common_term * sin_jpsi # <--- This matches the original formula exactly.
+    model_i = common_term * sin_jpsi
+    model_i = -common_term * sin_jpsi
 
     # --- 4. Calculate residuals and SSQ ---
     q_data = data[:ndata]

@@ -74,6 +74,23 @@ def _run_single_trial(job_packet: tuple) -> dict:
 class Experiment:
     """
     A declarative framework for defining and running complex simulation experiments.
+
+    The Experiment class is designed for high-throughput parallel execution. To avoid 
+    critical multiprocessing errors, the following rules must be strictly followed:
+
+    - The Worker is the Atomic Unit: The top-level worker function (_run_single_trial) 
+    is the atomic unit of work and encapsulates the entire "simulate-then-fit" pipeline 
+    for one set of parameters.
+
+    - No Nested Parallelism: Fitters called by a parallel Experiment run must be executed 
+    in sequential mode (e.g., StandardNLSFitter with parallel=False). The Experiment class
+    is the sole manager of the multiprocessing.Pool.
+
+    - User Logic Must Be Pickleable: All user-defined logic for configuring an experiment 
+    (e.g., creating physics objects, defining custom waveforms) must be contained within 
+    a class that inherits from ExperimentFactory. The user passes an instance of this class
+    to the experiment. This pattern ensures all necessary code and data can be safely 
+    "pickled" and sent to worker processes, avoiding AttributeError on __main__.
     """
     def __init__(self, description: str = "Unnamed Experiment"):
         self.description = description
