@@ -7,6 +7,7 @@ import pyplnoise
 import pandas as pd
 import logging
 import matplotlib.pyplot as plt
+from scipy.integrate import cumulative_trapezoid
 plt.rcParams.update(default_rc)
 from typing import Callable, Optional, Dict, Any
 
@@ -47,12 +48,8 @@ class LaserConfig:
         self.f_n = 0.0      # Frequency noise ASD (Hz/sqrt(Hz) @ 1 Hz)
         self.df_n = 0.0     # Modulation amplitude noise ASD
         self.amp_n = 0.0    # Amplitude noise ASD
-        
-        # --- Systematic Error Properties ---
-        # self.df_2nd_harmonic_frac = 0.0
-        # self.df_2nd_harmonic_phase = 0.0
 
-    def plot(self, n_cycles=3, n_points_per_cycle=1000):
+    def plot_waveform(self, n_cycles=3, n_points_per_cycle=1000):
         """
         Visualizes the configured modulation waveform over a few cycles.
 
@@ -112,6 +109,105 @@ class LaserConfig:
         fig.align_ylabels()
         
         return ax1, ax2
+    
+    def plot(self, n_cycles: int = 3, n_points_per_cycle: int = 1000, noise_seed: Optional[int] = 1):
+        """
+        Visualizes the full laser modulation signal and total interferometric phase generated
+        by this laser, accounting for all configured noise properties (f_n, df_n, amp_n).
+
+        This method temporarily constructs a minimal interferometer to use the
+        SignalGenerator's full physics engine, allowing for a realistic
+        demonstration of the laser's output under its defined noise characteristics.
+
+        Parameters
+        ----------
+        n_cycles : int, optional
+            The number of modulation cycles to plot. Defaults to 3.
+        n_points_per_cycle : int, optional
+            The number of points to use for rendering each cycle, affecting
+            the smoothness of the plot. Defaults to 1000.
+        noise_seed : int, optional
+            Seed for the random number generator for noise, to ensure
+            reproducible plots. If None, noise will be different each time.
+
+        Returns
+        -------
+        tuple[matplotlib.axes.Axes, matplotlib.axes.Axes]
+            The matplotlib axes objects for the two subplots. Returns (None, None)
+            if `f_mod` is zero or if a necessary component is missing.
+        """
+        if self.f_mod == 0:
+            logging.warning("Modulation frequency (f_mod) is zero. Cannot plot a full signal.")
+            return None, None
+
+        # --- 1. Setup Time Axis and Sampling Rate for Plotting ---
+        duration = n_cycles / self.f_mod
+        n_total_samples_plot = n_cycles * n_points_per_cycle
+        time_axis = np.linspace(0, duration, n_total_samples_plot, endpoint=False)
+        f_samp_plot = float(n_total_samples_plot / duration)
+
+        # --- 2. Create a Minimal InterferometerConfig for Simulation ---
+        # I create a dummy interferometer with a fixed path length difference
+        # to result in a typical, non-zero modulation depth (e.g., m=15 rad)
+        # using this laser's nominal df. This is purely for visualization.
+        dummy_ifo_label = f"{self.label}_plot_ifo"
+        dummy_ifo_config = InterferometerConfig(label=dummy_ifo_label)
+
+        # Calculate delta_l to achieve m = 15 rad (a representative value for a plot)
+        # using the nominal df of this laser.
+        target_m_for_plot = 1e-6 # rad
+        if self.df == 0:
+            dummy_delta_l = 1e-3 # A small, arbitrary non-zero length if df is zero
+            logging.warning(f"Laser modulation amplitude (df) is zero. Setting dummy delta_l to {dummy_delta_l*1e3:.1f}mm for signal visualization (m will be 0).")
+        else:
+            dummy_delta_l = target_m_for_plot * sc.c / (2 * np.pi * self.df)
+
+        dummy_ifo_config.ref_arml = 0.1 # Simplest arm configuration
+        dummy_ifo_config.meas_arml = dummy_delta_l
+
+        # --- 3. Create a Dummy DFMIObject ---
+        # This composes the current LaserConfig instance with the dummy InterferometerConfig.
+        dummy_dfmi_channel = DFMIObject(
+            label=f"{self.label}_signal_plot_channel",
+            laser_config=self, # Use 'self' (this LaserConfig instance)
+            ifo_config=dummy_ifo_config,
+            f_samp=f_samp_plot # Use the calculated sampling rate for plotting
+        )
+
+        # --- 4. Generate Noise Arrays and Run Full Simulation Physics ---
+        sg = SignalGenerator()
+        
+        # Generate the specific noise arrays for this plotting duration/sampling rate.
+        # noise_seed is passed to ensure reproducibility.
+        noise_arrays = sg._generate_noise_arrays(dummy_dfmi_channel, n_total_samples_plot, noise_seed)
+
+        # Run the core simulation physics. is_dynamic=False as we're not simulating
+        # dynamic arm motion in this context.
+        _, _, witness_freq, witness_phase, _ = sg._run_simulation_physics(
+            dummy_dfmi_channel, time_axis, noise_arrays, is_dynamic=False
+        )
+
+        # --- 5. Create the Plot ---
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        
+        # Plot 1: Noisy Voltage Signal
+        ax1.plot(time_axis * 1000, witness_freq, label='Simulated Voltage Signal $v(t)$')
+        ax1.set_title(f"Simulated DFMI Signal from Laser '{self.label}' with Noise")
+        ax1.set_ylabel("Voltage (a.u.)")
+        ax1.grid(True, linestyle='--', alpha=0.6)
+        ax1.legend()
+        
+        # Plot 2: Total Interferometric Phase (Phi_tot)
+        ax2.plot(time_axis * 1000, witness_phase, label='Total Interferometric Phase $\\Phi_{\\text{tot}}(t)$')
+        ax2.set_xlabel("Time (ms)")
+        ax2.set_ylabel("Phase (rad)")
+        ax2.grid(True, linestyle='--', alpha=0.6)
+        ax2.legend()
+        
+        plt.tight_layout()
+        fig.align_ylabels()
+        
+        return ax1, ax2
 
 class InterferometerConfig:
     """
@@ -129,15 +225,15 @@ class InterferometerConfig:
         self.label = label
         
         # --- Static Path Properties ---
-        self.phi = 0.0
-        self.ref_arml = 0.1
-        self.meas_arml = 0.3
+        self.phi = 0.0 # Interferometer phase
+        self.ref_arml = 0.1 # Reference arm-length
+        self.meas_arml = 0.3 # Measurement arm-length
         
         # --- Dynamic Path Properties ---
-        self.arml_mod_f = 5.0
-        self.arml_mod_amp = 0.0
-        self.arml_mod_psi = 0.0
-        self.arml_mod_n = 0.0 # Armlength noise ASD
+        self.arml_mod_f = 5.0 # Armlength modulation frequency
+        self.arml_mod_amp = 0.0 # Armlength modulation amplitude
+        self.arml_mod_psi = 0.0 # Armlength modulation phase
+        self.arml_mod_n = 0.0 # Armlength modulation amplitude noise ASD
 
 class DFMIObject:
     """
@@ -170,7 +266,7 @@ class DFMIObject:
         self.ifo = ifo_config     # InterferometerConfig object
         
         # --- Simulation-specific Parameters ---
-        self.f_samp = int(f_samp) # Sampling frequency (Hz)
+        self.f_samp = float(f_samp) # Sampling frequency (Hz)
         self.N = 0                # Number of samples, set after simulation
         self.simtime = None       # Simulation time, set after simulation
         self.fit_n = 20           # Default number of cycles to average in a fit
@@ -303,17 +399,17 @@ class SignalGenerator:
             noise = self._generate_noise_arrays(main_config, len(time_axis), trial_num)
         
         # The physics engine now returns the ground truth phase
-        y_main, phitot_main, phi_sim_main = self._run_simulation_physics(main_config, time_axis, noise, is_dynamic=True)
+        dfmi_signal, dfmi_phase, _, _, simulated_phase_ground_truth = self._run_simulation_physics(main_config, time_axis, noise, is_dynamic=True)
 
-        raw_main = DeepRawObject(data=pd.DataFrame(y_main, columns=["ch0"]))
+        raw_main = DeepRawObject(data=pd.DataFrame(dfmi_signal, columns=["ch0"]))
         raw_main.label = main_config.label
         raw_main.f_samp = main_config.f_samp
         raw_main.f_mod = main_config.laser.f_mod
         raw_main.sim = main_config
         
         # Store all ground truth and noise signals
-        raw_main.phi = phitot_main # The full phase with all noise
-        raw_main.phi_sim = phi_sim_main # The ground truth phase to recover
+        raw_main.phi = dfmi_phase # The full phase with all noise
+        raw_main.phi_sim = simulated_phase_ground_truth # The ground truth phase to recover
         raw_main.f_noise = noise.get('laser_frequency', 0.0)
         raw_main.a_noise = noise.get('amplitude', 0.0)
         raw_main.l_noise = noise.get('armlength', 0.0)
@@ -323,15 +419,15 @@ class SignalGenerator:
 
         if witness_config is not None:
             # Witness uses the same common noise but its own (static) physics
-            y_witness, phitot_witness, phi_sim_witness = self._run_simulation_physics(witness_config, time_axis, noise, is_dynamic=False)
-            raw_witness = DeepRawObject(data=pd.DataFrame(y_witness, columns=["ch0"]))
+            witness_signal, witness_phase, _ , _, simulated_phase_ground_truth = self._run_simulation_physics(witness_config, time_axis, noise, is_dynamic=False)
+            raw_witness = DeepRawObject(data=pd.DataFrame(witness_signal, columns=["ch0"]))
             raw_witness.label = witness_config.label
             raw_witness.f_samp = witness_config.f_samp
             raw_witness.f_mod = witness_config.laser.f_mod
             raw_witness.sim = witness_config
             # Store its ground truth and common noise
-            raw_witness.phi = phitot_witness
-            raw_witness.phi_sim = phi_sim_witness
+            raw_witness.phi = witness_phase
+            raw_witness.phi_sim = simulated_phase_ground_truth
             raw_witness.f_noise = noise.get('laser_frequency', 0.0)
             raw_witness.a_noise = noise.get('amplitude', 0.0)
             output_channels['witness'] = raw_witness
@@ -478,7 +574,7 @@ class SignalGenerator:
 
         return final_noise
 
-    def _run_simulation_physics(self, sim_config, time_axis, noise_arrays, is_dynamic=True):
+    def _run_simulation_physics(self, sim_config: DFMIObject, time_axis: np.ndarray, noise_arrays: Dict[str, np.ndarray], is_dynamic: bool = True):
         """
         Core physics engine for a single channel using the EXACT physical model.
 
@@ -496,39 +592,55 @@ class SignalGenerator:
             The time vector for the simulation.
         noise_arrays : dict
             A dictionary containing the pre-generated time series for each noise source.
+            Expected keys: 'df' (modulation amplitude noise), 'laser_frequency' (frequency noise),
+            'amplitude' (amplitude noise on overall signal amplitude), 'armlength' (arm length noise).
         is_dynamic : bool, optional
             If True, includes dynamic arm length modulation and noise.
 
         Returns
         -------
-        y_final : numpy.ndarray
-            The final simulated voltage time series.
-        phitot_final : numpy.ndarray
-            The total phase inside the final cosine term.
-        phi_sim_ground_truth : numpy.ndarray
-            The ground truth interferometric phase from path length changes only.
+        dfmi_signal : numpy.ndarray
+            The final simulated DFMI voltage time series.
+        dfmi_phase : numpy.ndarray
+            The total interferometric phase within the cosine term of the DFMI voltage time series.
+        witness_signal : numpy.ndarray
+            Voltage signal "witnessed" by idealized heterodyne witness interferometer,
+            capturing the laser's instantaneous frequency modulation and noise.
+        witness_phase : numpy.ndarray
+            The instantaneous phase of the ideal heterodyne witness interferometer's beatnote.
+        simulated_phase_ground_truth : numpy.ndarray
+            The ground truth interferometric phase from path length changes only,
+            excluding frequency modulation and laser frequency noise.
         """
-        # --- 1. Unpack Configuration and Construct True Frequency Waveform ---
+        # --- Unpack Configuration and Construct True Frequency Waveform ---
         laser = sim_config.laser
         ifo = sim_config.ifo
         omega_mod = 2 * np.pi * laser.f_mod
 
-        # Construct the normalized, unitless frequency modulation waveform g(t)
+        # --- Construct the normalized, unitless frequency modulation waveform g(t) ---
         # by calling the function stored in the laser config.
         phase_axis = omega_mod * time_axis + laser.psi
         g_t = laser.waveform_func(phase_axis, **laser.waveform_kwargs)
 
-        g_t_normalized = g_t / np.max(np.abs(g_t))
+        # Ensure g_t is properly normalized, handling potential division by zero if g_t is all zeros
+        max_abs_g_t = np.max(np.abs(g_t))
+        g_t_normalized = g_t / max_abs_g_t if max_abs_g_t != 0 else np.zeros_like(g_t)
         
-        # --- 2. Construct True Phase Modulation Waveform phi_mod(t) ---
+        # --- Construct True Phase Modulation Waveform phi_mod(t) ---
         # Integrate the true frequency waveform to get the phase waveform
         df_noisy = laser.df + noise_arrays.get('df', 0.0)
+
         dt = time_axis[1] - time_axis[0]
-        phi_mod_waveform = 2 * np.pi * df_noisy * np.cumsum(g_t_normalized) * dt
+        fs = 1/dt
+        phi_mod_waveform = (2*np.pi/fs)*np.cumsum(df_noisy * g_t_normalized)
+
+        # Using cumtrapz for better accuracy in numerical integration
+        # phi_mod_waveform = 2 * np.pi * cumulative_trapezoid(df_noisy * g_t_normalized, x=time_axis, initial=0.0)
         
-        # --- 3. Calculate Delays and Path Lengths ---
+        # --- Calculate Delays and Path Lengths ---
         tau_r = ifo.ref_arml / sc.c
         tau_m = ifo.meas_arml / sc.c
+        
         if not is_dynamic:
             path_length_change = ifo.phi * laser.wavelength / (2 * np.pi)
         else:
@@ -537,27 +649,36 @@ class SignalGenerator:
                                 + ifo.phi * laser.wavelength / (2 * np.pi))
         tau_dl = path_length_change / sc.c
 
-        # --- 4. Calculate Final Phase using the EXACT Model ---
-        t_interp_meas = time_axis - tau_m - tau_dl
+        # --- Calculate Final Phase using the EXACT Model ---
+        t_interp_meas = time_axis - (tau_m + tau_dl)
         t_interp_ref = time_axis - tau_r
         
-        # Interpolate the full phase modulation waveform at delayed times
+        # --- Interpolate the full phase modulation waveform at delayed times ---
         phi_mod_meas = np.interp(t_interp_meas, time_axis, phi_mod_waveform)
         phi_mod_ref = np.interp(t_interp_ref, time_axis, phi_mod_waveform)
         delta_phi_mod = phi_mod_meas - phi_mod_ref
         
-        # Add the carrier phase term, including frequency noise
-        omega_0_noisy = 2 * np.pi * (sc.c / laser.wavelength + noise_arrays.get('laser_frequency', 0.0))
-        delta_phi_carrier = omega_0_noisy * (tau_m - tau_r + tau_dl)
+        # --- Add the carrier phase term, including frequency noise ---
+        f0_noisy = (sc.c / laser.wavelength) + noise_arrays.get('laser_frequency', 0.0)
+        omega_0_noisy = 2 * np.pi * f0_noisy
+        delta_phi_carrier = omega_0_noisy * ((tau_m + tau_dl) - tau_r)
 
-        phitot_final = delta_phi_carrier + delta_phi_mod
+        dfmi_phase = delta_phi_carrier + delta_phi_mod
         
-        # --- 5. Generate Final Signal and Ground Truth ---
-        y_final = laser.amp + noise_arrays.get('amplitude', 0.0) + laser.amp * laser.visibility * np.cos(phitot_final)
+        # --- Generate Final DFMI Signal and Ground Truth ---
+        # Calculate effective amplitude, incorporating amplitude noise multiplicatively
+        amplitude_effective = laser.amp + noise_arrays.get('amplitude', 0.0)
+        
+        # The DFMI signal: A_effective * [1 + k * cos(Phi)]
+        dfmi_signal = amplitude_effective * (1 + laser.visibility * np.cos(dfmi_phase))
         
         omega_0_clean = 2 * np.pi * sc.c / laser.wavelength
-        phi_sim_ground_truth = omega_0_clean * (tau_m - tau_r + tau_dl)
-        if np.isscalar(phi_sim_ground_truth):
-            phi_sim_ground_truth = np.full_like(time_axis, phi_sim_ground_truth, dtype=float)
+        simulated_phase_ground_truth = omega_0_clean * ((tau_m + tau_dl) - tau_r)
+        if np.isscalar(simulated_phase_ground_truth):
+            simulated_phase_ground_truth = np.full_like(time_axis, simulated_phase_ground_truth, dtype=float)
 
-        return y_final, phitot_final, phi_sim_ground_truth
+        # --- Generate the Laser's True (Noisy) "Heterodyne-Witness" Signal ---
+        witness_freq = (df_noisy * g_t_normalized) + noise_arrays.get('laser_frequency', 0.0)
+        witness_phase = (2*np.pi/fs)*np.cumsum(np.array(witness_freq-np.mean(witness_freq)))
+        
+        return dfmi_signal, dfmi_phase, witness_freq, witness_phase, simulated_phase_ground_truth
