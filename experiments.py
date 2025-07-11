@@ -13,15 +13,41 @@ from typing import Optional, Callable, Dict, Any, List, Union
 def _run_single_trial(job_packet: tuple) -> dict:
     """
     Worker function for parallel processing. Executes one full trial.
-    (This function remains unchanged from our previous refactor)
+    Configure -> Simulate -> Analyze.
     """
-    # 1. Unpack the job packet
-    trial_params, config_factory, analyses_to_run, n_seconds, f_samp, trial_num = job_packet
+    # Unpack the job packet
+    trial_params, config_factory, analyses_to_run, num_fit_buffers, f_samp, trial_num = job_packet
 
-    # 2. Create the physics configurations for this trial
+    # Create the physics configurations for this trial
     configs = config_factory(trial_params)
+    laser_config=configs['laser_config']
 
-    # 3. Instantiate and run the simulation using a local DFF object
+    # Determine simulation duration based on desired number of fit buffers and fitter 'n'
+    # I assume the first analysis (if NLS) dictates the 'n' (cycles per buffer).
+    # If no 'n' is explicitly defined, I'll use a sensible default (e.g., 20 cycles/buffer).
+    first_analysis_n_cycles = None
+    for analysis in analyses_to_run:
+        if 'n' in analysis.get('fitter_kwargs', {}):
+            first_analysis_n_cycles = analysis['fitter_kwargs']['n']
+            break
+
+    if first_analysis_n_cycles is None:
+        first_analysis_n_cycles = 20 # Sensible default for NLS-like buffer size
+
+    # Calculate R (raw samples per fit buffer) based on the sampling frequency
+    R = int(f_samp / laser_config.f_mod * first_analysis_n_cycles)
+
+    # Calculate the total number of raw samples needed for this trial.
+    num_samples_needed = num_fit_buffers * R
+    if num_samples_needed == 0:
+        # Handle edge case where calculated samples needed is zero
+        logging.warning("Calculated num_samples_needed is zero. Setting to 1 to avoid division by zero.")
+        num_samples_needed = 1
+
+    # Calculate the actual simulation time in seconds.
+    n_seconds_to_simulate = num_samples_needed / f_samp
+
+    # Instantiate and run the simulation using a local DFF object
     dff_local = dfm.DeepFitFramework()
     main_sim_label = "main"
     main_channel_sim = DFMIObject(label=main_sim_label, laser_config=configs['laser_config'],
@@ -37,13 +63,13 @@ def _run_single_trial(job_packet: tuple) -> dict:
 
     dff_local.simulate(
         main_label=main_sim_label, 
-        n_seconds=n_seconds, 
+        n_seconds=n_seconds_to_simulate, 
         mode='asd',
         trial_num=trial_num,
         witness_label=witness_sim_label
     )
 
-    # 4. Run the requested analyses
+    # Run the requested analyses
     trial_results = {}
     for analysis in analyses_to_run:
         analysis_name = analysis['name']
@@ -100,7 +126,7 @@ class Experiment:
         self.config_factory: Optional[ExperimentFactory] = None
         self.analyses: List[Dict[str, Any]] = []
         self.n_trials: int = 1
-        self.n_seconds_per_trial: float = 1.0
+        self.n_fit_buffers_per_trial: int = 10
         self.f_samp: int = 200000
 
     def add_axis(self, name: str, values: np.ndarray):
@@ -299,7 +325,7 @@ class Experiment:
                 # This packet is guaranteed to be pickleable.
                 job_packets.append((
                     trial_params, self.config_factory, self.analyses,
-                    self.n_seconds_per_trial, self.f_samp, trial_counter
+                    self.n_fit_buffers_per_trial, self.f_samp, trial_counter
                 ))
                 trial_counter += 1
 
