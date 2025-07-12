@@ -109,13 +109,13 @@ Modulation frequency: {}
         self.f_samp = float(values[1])
         self.f_mod  = float(values[2])
 
-    def plot(self, title=None, xrange=None, figsize=(20,5)):
+    def plot(self, title=None, ax=None, xrange=None, figsize=(20,5), *args, **kwargs):
         
         t_list = [np.arange(len(self.data))/self.f_samp]
         y_list = [self.data]
         
-        return time_plot(t_list, y_list, label_list=[self.label], xrange=xrange,\
-            title=title, y_label='Voltage(t)', figsize=figsize, remove_y_offsets=False, remove_time_offsets=False)
+        return time_plot(t_list, y_list, label_list=[self.label], ax=ax, xrange=xrange,\
+            title=title, y_label='Voltage(t)', figsize=figsize, remove_y_offsets=False, remove_time_offsets=False, *args, **kwargs)
 
 
 class DeepFitObject():
