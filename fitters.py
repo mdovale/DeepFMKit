@@ -245,6 +245,7 @@ class EKFFitter(BaseFitter):
         P0_diag = kwargs.get('P0_diag', [1.0] * 5)
         Q_diag = kwargs.get('Q_diag', [1e-8, 1e-8, 1e-6, 1e-6, 1e-8])
         R_val = kwargs.get('R_val', None)
+        verbose = kwargs.get('verbose', True)
 
         # --- 1. EKF Initialization ---
         # State vector: x = [amplitude, mod_depth, phase, mod_phase, dc_offset]
@@ -268,7 +269,9 @@ class EKFFitter(BaseFitter):
         logging.debug(f"Running EKF for {n_samp} samples...")
         
         # --- 2. Main EKF Loop ---
-        for k in tqdm(range(n_samp), desc="EKF Progress"):
+        loop_iter = tqdm(range(n_samp), desc="EKF Progress") if verbose else range(n_samp)
+
+        for k in loop_iter:
             # PREDICT STEP
             P = F @ P @ F.T + Q
 
