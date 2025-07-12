@@ -116,8 +116,8 @@ def dfm_axes():
     ax5.set_ylabel('DC value')
     ax4.set_ylabel('AC amp')
     ax3.set_ylabel('m')
-    ax2.set_ylabel('$\phi\,(\mathrm{rad})$')
-    ax1.set_ylabel('$\psi\,(\mathrm{rad})$')
+    ax2.set_ylabel(r'$\phi\,(\mathrm{rad})$')
+    ax1.set_ylabel(r'$\psi\,(\mathrm{rad})$')
 
     fig1.align_ylabels()
 
@@ -134,7 +134,7 @@ def displacement_req(x, level, corner):
     phase_level = (2 * np.pi / wl) * level
     return phase_req(x, phase_level, corner)
 
-def time_plot(t_list, y_list, label_list=None, xrange=None, \
+def time_plot(t_list, y_list, label_list=None, ax=None, xrange=None, \
     title=None, y_label=None, figsize=(20,5),\
     remove_y_offsets=False, remove_time_offsets=False, *args, **kwargs):
     """
@@ -161,7 +161,11 @@ def time_plot(t_list, y_list, label_list=None, xrange=None, \
     if label_list is not None:
         assert len(t_list) == len(label_list), "len(label_list) != len(t_list)"
 
-    fig, ax = plt.subplots(1, figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(1, figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
     ax.set_xlabel('Time')
     if y_label is not None:
         ax.set_ylabel(y_label)
@@ -304,7 +308,7 @@ def asd_plot(f_list, asd_list, label_list=None, title=None, unit=None, psd=False
         unit = 'A'
         
     xlabel = r"Frequency$\,({\mathrm{Hz}})$"
-    ylabel = r"ASD$\,(\mathrm{" + unit + "}/\sqrt{\mathrm{Hz}})$"
+    ylabel = r"ASD$\,(\mathrm{" + unit + r"}/\sqrt{\mathrm{Hz}})$"
         
     fig, ax = plt.subplots(1, figsize=figsize(1.2), dpi=1 * 300)
 
