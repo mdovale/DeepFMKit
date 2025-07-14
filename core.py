@@ -647,15 +647,17 @@ class DeepFitFramework():
         if pm == True:
             log_plot(self.f, displacement_req(self.fits[fit].f, 1e-12, 3e-3), ax, title, xlabel, ylabel, "1 pm")
 
-    def plot(self, labels=None, which=None, figsize=None, xrange=None, *args, **kwargs):
+    def plot(self, labels=None, which=None, figsize=None, xrange=None, styles=None, *args, **kwargs):
         """Plot selected fit data for the specified `labels`, or all if None.
-        
+
         Parameters
         ----------
         which : list of str or None
             Subset of ['ssq', 'dc', 'amp', 'm', 'psi'] to plot. If None, all are plotted.
         labels : list of str or None
             Keys in self.fits to plot. If None, plots all.
+        styles : list of str or None
+            Linestyles to use for each label. Must match length of `labels`.
         xrange : tuple or None
             X-axis limits to apply to all plots.
 
@@ -670,43 +672,57 @@ class DeepFitFramework():
             which = [which]
         valid_keys = ['psi', 'phi', 'm', 'amp', 'dc', 'ssq']
         which = [w for w in which if w in valid_keys]
-        
+
         n = len(which)
         self.fig, axs = plt.subplots(n, 1, figsize=figsize, sharex=True)
         if n == 1:
-            axs = [axs]  # make iterable if only one axis
+            axs = [axs]
 
         key_to_ax = dict(zip(which, axs))
         selected_labels = labels if labels is not None else self.fits.keys()
 
-        for k in selected_labels:
+        if styles is None or len(styles) != len(selected_labels):
+            styles = [None] * len(selected_labels)
+
+        for k, ls in zip(selected_labels, styles):
             fit = self.fits[k]
+            plot_kwargs = dict(kwargs)
+            if ls is not None:
+                plot_kwargs['linestyle'] = ls
             for key in which:
                 ax = key_to_ax[key]
                 if key == 'psi':
-                    ax.plot(fit.time, fit.psi, *args, **kwargs)
+                    ax.plot(fit.time, fit.psi, label=str(k), *args, **plot_kwargs)
+                    ax.set_ylabel(r'$\Psi$ (rad)')
                 elif key == 'phi':
-                    ax.plot(fit.time, fit.phi, label=str(k), *args, **kwargs)
+                    ax.plot(fit.time, fit.phi, label=str(k),  *args, **plot_kwargs)
+                    ax.set_ylabel(r'$\Phi$ (rad)')
                 elif key == 'm':
-                    ax.plot(fit.time, fit.m, *args, **kwargs)
+                    ax.plot(fit.time, fit.m, label=str(k), *args, **plot_kwargs)
+                    ax.set_ylabel(r'$m$ (rad)')
                 elif key == 'amp':
-                    ax.plot(fit.time, fit.amp, *args, **kwargs)
+                    ax.plot(fit.time, fit.amp, label=str(k), *args, **plot_kwargs)
+                    ax.set_ylabel(r'$C$ (V)')
                 elif key == 'dc':
-                    ax.plot(fit.time, fit.dc, *args, **kwargs)
+                    ax.plot(fit.time, fit.dc, label=str(k), *args, **plot_kwargs)
+                    ax.set_ylabel('dc (V)')
                 elif key == 'ssq':
-                    ax.semilogy(fit.time, fit.ssq, *args, **kwargs)
+                    ax.semilogy(fit.time, fit.ssq, label=str(k), *args, **plot_kwargs)
+                    ax.set_ylabel('SSQ')
 
         for key, ax in key_to_ax.items():
-            ax.set_ylabel(key)
             if xrange is not None:
                 ax.set_xlim(xrange)
                 autoscale_y(ax)
-            if key == 'psi':
-                ax.legend()
 
-        axs[-1].set_xlabel("Time")
+        axs[-1].set_xlabel("Time (s)")
         self.fig.align_ylabels()
-        return axs
+        self.fig.tight_layout()
+
+        if len(axs) == 1:
+            return axs[0]
+        else:
+            return axs
 
     def plot_diff(self, label1, label2, xrange=None):
         """Plot the absolute difference between the fit 

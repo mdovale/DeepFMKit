@@ -299,23 +299,25 @@ class DFMIObject:
 DFMI Channel Configuration: '{self.label}'
 ============================================================
 --- Laser Source ('{self.laser.label}') ---
-  Wavelength:        {self.laser.wavelength * 1e6:.3f} um
-  Modulation Freq:   {self.laser.f_mod} Hz
+  Wavelength:          {self.laser.wavelength * 1e6:.3f} um
+  Modulation Freq:     {self.laser.f_mod} Hz
   Modulation Amp (df): {self.laser.df / 1e9:.3f} GHz
   Signal Amplitude:    {self.laser.amp:.2f}
   Visibility:          {self.laser.visibility:.2f}
 
 --- Interferometer Path ('{self.ifo.label}') ---
-  Reference Arm:     {self.ifo.ref_arml:.4f} m
-  Measurement Arm:   {self.ifo.meas_arml:.4f} m
-  OPD (delta_l):     {(self.ifo.meas_arml - self.ifo.ref_arml)*100:.2f} cm
-  Dynamic Motion Amp: {self.ifo.arml_mod_amp * 1e9:.2f} nm
+  Reference Arm:       {self.ifo.ref_arml:.4f} m
+  Measurement Arm:     {self.ifo.meas_arml:.4f} m
+  OPD (delta_l):       {(self.ifo.meas_arml - self.ifo.ref_arml)*100:.2f} cm
+  Dynamic Motion Amp:  {self.ifo.arml_mod_amp * 1e9:.2f} nm
 
 --- Derived & Simulation Parameters ---
-  Modulation Depth (m): {self.m:.4f} rad
-  Sampling Freq:        {self.f_samp / 1e3:.1f} kHz
-  Fit Cycles (fit_n):   {self.fit_n}
-  Simtime / N:          {self.simtime if self.simtime else 'N/A'}{'' if self.simtime is None else ' s'} / {self.N if self.N > 0 else 'N/A'}
+  Modulation Depth (m):  {self.m:.4f} rad
+  Sampling Freq:         {self.f_samp / 1e3:.1f} kHz
+  Downsampling Factor:   {self.f_samp/self.f_fit}
+  Fit Cycles (fit_n):    {self.fit_n}
+  Output Data Rate (Hz): {self.f_fit}
+  Simtime / N:           {self.simtime if self.simtime else 'N/A'}{'' if self.simtime is None else ' s'} / {self.N if self.N > 0 else 'N/A'}
 ============================================================
 """
         logging.info(info_str)
