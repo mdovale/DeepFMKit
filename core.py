@@ -7,14 +7,9 @@ from .fitters import *
 
 import numpy as np
 import scipy.constants as sc
-from scipy.integrate import cumulative_trapezoid
-from scipy.optimize import least_squares, minimize, minimize_scalar
-from scipy.special import jv, jn
 import pandas as pd
-from tqdm import tqdm
 import time
 import matplotlib.pyplot as plt
-plt.rcParams.update(default_rc)
 
 import logging
 logging.basicConfig(

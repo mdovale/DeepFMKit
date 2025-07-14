@@ -1,5 +1,4 @@
 from .data import DeepRawObject
-from .plotting import default_rc
 
 import numpy as np
 import scipy.constants as sc

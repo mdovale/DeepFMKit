@@ -1,6 +1,3 @@
-# This is the complete content for the new waveforms.py file.
-# I have included your existing functions and added the new dfm_wave function.
-
 import numpy as np
 from scipy.signal import sawtooth, square
 

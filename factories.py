@@ -1,5 +1,4 @@
 from DeepFMKit import physics
-from DeepFMKit.helpers import snr_to_asd
 
 import numpy as np
 import scipy.constants as sc

@@ -1,7 +1,6 @@
 import numpy as np
-from math import cos, sin, log, sqrt, exp
+from math import cos, sin
 from scipy.special import jv
-from scipy.optimize import brent
 
 NPARMS = 4
 MAXDATA = 40 # default 20
