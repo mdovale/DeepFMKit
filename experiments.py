@@ -22,20 +22,8 @@ def _run_single_trial(job_packet: tuple) -> dict:
     configs = config_factory(trial_params)
     laser_config=configs['laser_config']
 
-    # Determine simulation duration based on desired number of fit buffers and fitter 'n'
-    # I assume the first analysis (if NLS) dictates the 'n' (cycles per buffer).
-    # If no 'n' is explicitly defined, I'll use a sensible default (e.g., 20 cycles/buffer).
-    first_analysis_n_cycles = None
-    for analysis in analyses_to_run:
-        if 'n' in analysis.get('fitter_kwargs', {}):
-            first_analysis_n_cycles = analysis['fitter_kwargs']['n']
-            break
-
-    if first_analysis_n_cycles is None:
-        first_analysis_n_cycles = 20 # Sensible default for NLS-like buffer size
-
     # Calculate R (raw samples per fit buffer) based on the sampling frequency
-    R = int(f_samp / laser_config.f_mod * first_analysis_n_cycles)
+    R = int(f_samp / laser_config.f_mod)
 
     # Calculate the total number of raw samples needed for this trial.
     num_samples_needed = num_fit_buffers * R
@@ -79,6 +67,7 @@ def _run_single_trial(job_packet: tuple) -> dict:
             'main_label': main_sim_label
         })
         if analysis['fitter_method'] in ['nls', 'ekf']:
+            fitter_args['n'] = num_fit_buffers
             fitter_args['parallel'] = False
         if 'wdfmi' in analysis['fitter_method'] or 'hwdfmi' in analysis['fitter_method']:
             fitter_args['witness_label'] = witness_sim_label
@@ -95,7 +84,6 @@ def _run_single_trial(job_packet: tuple) -> dict:
             
     # 6. Return the results packet
     return {'point_params': trial_params, 'results': trial_results}
-
 
 class Experiment:
     """
@@ -124,21 +112,44 @@ class Experiment:
         self.static_params: Dict[str, Any] = {}
         self.stochastic_vars: Dict[str, Dict[str, Any]] = {}
         self.config_factory: Optional[ExperimentFactory] = None
+        self._expected_params_keys: Set[str] = set() # Store expected parameters for validation
         self.analyses: List[Dict[str, Any]] = []
         self.n_trials: int = 1
         self.n_fit_buffers_per_trial: int = 10
         self.f_samp: int = 200000
+        self.results: Optional[Dict[str, Any]] = None # To store aggregated results after run()
+
+    def _validate_param_name(self, name: str):
+        """Internal helper to validate if a parameter name is expected by the factory."""
+        if not self._expected_params_keys:
+            logging.warning("No config factory set yet. Parameter validation will be skipped until set_config_factory() is called.")
+            return
+
+        if name not in self._expected_params_keys:
+            raise ValueError(
+                f"Parameter '{name}' is not recognized by the current "
+                f"ExperimentFactory ({type(self.config_factory).__name__}).\n"
+                f"Expected parameters are: {sorted(list(self._expected_params_keys))}.\n"
+                f"Please update your ExperimentFactory to handle this parameter "
+                f"or remove it from your experiment configuration."
+            )
 
     def add_axis(self, name: str, values: np.ndarray):
         """Adds a new parameter axis to the experiment's sweep space."""
+        self._validate_param_name(name)
         self.axes[name] = np.asarray(values)
 
     def set_static(self, params: Dict[str, Any]):
         """Sets parameters that remain constant across all trials and axes."""
+        for name in params.keys():
+            self._validate_param_name(name)
         self.static_params.update(params)
 
     def add_stochastic_variable(self, name: str, generator_func: Callable, depends_on: Optional[str] = None):
         """Adds a stochastic variable for Monte Carlo trials."""
+        self._validate_param_name(name)
+        if depends_on is not None:
+            self._validate_param_name(depends_on) # Also validate the dependency
         self.stochastic_vars[name] = {'generator': generator_func, 'depends_on': depends_on}
 
     def set_config_factory(self, factory: ExperimentFactory):
@@ -150,6 +161,10 @@ class Experiment:
         if not isinstance(factory, ExperimentFactory):
             raise TypeError("factory must be an instance of a class that inherits from ExperimentFactory.")
         self.config_factory = factory
+        # Once the factory is set, retrieve its expected parameters for validation
+        self._expected_params_keys = self.config_factory._get_expected_params_keys()
+        logging.info(f"Config factory '{type(factory).__name__}' set. Expected parameters: {sorted(list(self._expected_params_keys))}")
+
 
     def add_analysis(self, name: str, fitter_method: str, result_cols: Optional[List[str]] = None, fitter_kwargs: Optional[Dict[str, Any]] = None):
         """Defines an analysis to be run on the simulated data."""
@@ -246,8 +261,10 @@ class Experiment:
         # IMPORTANT: Restore the global random state to not affect other parts of the user's script.
         np.random.set_state(original_random_state)
             
-        # 4. Return the complete, representative parameter set.
-        return params
+        # 4. Filter parameters to include only those expected by the factory,
+        # plus the internal _exp_point_idx and _exp_trial_idx
+        filtered_params = {k: v for k, v in params.items() if k in self._expected_params_keys or k.startswith('_exp_')}
+        return filtered_params
 
     def run(self, n_cores: Optional[int] = None) -> Dict[str, Any]:
         """
@@ -274,8 +291,8 @@ class Experiment:
         # --- 0. Pre-flight Checks ---
         if self.config_factory is None:
             raise ValueError("A configuration factory must be set using set_config_factory().")
-        if not self.axes:
-            raise ValueError("At least one parameter axis must be defined using add_axis().")
+        if not self.axes and not self.n_trials > 0:
+             raise ValueError("At least one parameter axis must be defined using add_axis(), or n_trials must be > 0.")
         
         if n_cores is None:
             n_cores = os.cpu_count()
@@ -321,10 +338,18 @@ class Experiment:
                     else:
                         trial_params[var_name] = generator()
                 
+                # Filter trial_params to include only those keys that the factory expects
+                # along with internal experiment indices. This prevents passing unexpected
+                # parameters to the factory, which might cause errors or confusion.
+                trial_params_for_factory = {
+                    k: v for k, v in trial_params.items()
+                    if k in self._expected_params_keys or k.startswith('_exp_')
+                }
+
                 # Create the final job "packet" (a simple tuple) and add it to the list.
                 # This packet is guaranteed to be pickleable.
                 job_packets.append((
-                    trial_params, self.config_factory, self.analyses,
+                    trial_params_for_factory, self.config_factory, self.analyses,
                     self.n_fit_buffers_per_trial, self.f_samp, trial_counter
                 ))
                 trial_counter += 1
@@ -360,8 +385,13 @@ class Experiment:
 
             # Initialize the final numerical grid for each parameter with NaNs.
             # The shape is (len(axis1), len(axis2), ..., n_trials).
-            for col in cols_to_collect:
+            # Handle the case where there are no axes defined but n_trials > 0
+            if not axis_names:
+                shape = (self.n_trials,)
+            else:
                 shape = tuple(len(ax) for ax in self.axes.values()) + (self.n_trials,)
+            
+            for col in cols_to_collect:
                 all_trials_grid = np.full(shape, np.nan, dtype=float)
                 results[analysis_name][col] = {'all_trials': all_trials_grid}
 
@@ -371,7 +401,10 @@ class Experiment:
             point_idx = packet['point_params']['_exp_point_idx']
             trial_idx = packet['point_params']['_exp_trial_idx']
             # Combine them to get the full index for the final grid
-            full_idx = point_idx + (trial_idx,)
+            if not axis_names: # Handle case of no axes, just trials
+                full_idx = (trial_idx,)
+            else:
+                full_idx = point_idx + (trial_idx,)
             
             for analysis in self.analyses:
                 analysis_name = analysis['name']
@@ -387,16 +420,31 @@ class Experiment:
             for col, stats_dict in res_dict.items():
                 stats_dict['mean'] = np.nanmean(stats_dict['all_trials'], axis=-1)
                 stats_dict['std'] = np.nanstd(stats_dict['all_trials'], axis=-1)
+                stats_dict['min'] = np.nanmin(stats_dict['all_trials'], axis=-1)
+                stats_dict['max'] = np.nanmax(stats_dict['all_trials'], axis=-1)
+
+                # Define "worst-case" as the most extreme deviation from the mean
+                deviation = np.abs(stats_dict['all_trials'] - stats_dict['mean'][..., np.newaxis])
+                worst_indices = np.nanargmax(deviation, axis=-1)
+                worst_case = np.take_along_axis(stats_dict['all_trials'], worst_indices[..., np.newaxis], axis=-1).squeeze(-1)
+                stats_dict['worst'] = worst_case
 
         logging.info("Experiment run complete. Results aggregated.")
+        self.results = results # Store results for potential plotting/inspection
         return results
     
     def plot(self, analysis_name: str, param_to_plot: str, stat: str = 'mean', ax=None):
         """Visualizes 1D or 2D experiment results using Matplotlib."""
         if self.results is None: raise RuntimeError("Experiment has not been run.")
         import matplotlib.pyplot as plt
+        
         num_axes = len(self.axes)
-        if num_axes not in [1, 2]: raise ValueError(f"Plotting is only for 1D/2D experiments.")
+        if num_axes not in [1, 2]: 
+            # Handle the case where no axes are defined (n_trials only)
+            if num_axes == 0 and self.n_trials > 0:
+                logging.warning("No axes defined. Plotting not supported for n_trials only via this method.")
+                return None
+            raise ValueError(f"Plotting is only for 1D/2D experiments. This experiment has {num_axes} axes.")
         
         data = self.results[analysis_name][param_to_plot][stat]
         
@@ -408,12 +456,20 @@ class Experiment:
         if num_axes == 1:
             x_vals = self.axes[axis_names[0]]
             ax.plot(x_vals, data)
-            if stat == 'mean': ax.fill_between(x_vals, data - self.results[analysis_name][param_to_plot]['std'], data + self.results[analysis_name][param_to_plot]['std'], alpha=0.2)
+            if stat == 'mean': 
+                # Ensure std is available before plotting fill_between
+                if 'std' in self.results[analysis_name][param_to_plot]:
+                    ax.fill_between(x_vals, data - self.results[analysis_name][param_to_plot]['std'], data + self.results[analysis_name][param_to_plot]['std'], alpha=0.2)
             ax.set_xlabel(axis_names[0])
             ax.set_ylabel(f"{stat.capitalize()} of {param_to_plot}")
         
         elif num_axes == 2:
+            # Need to decide which axis goes on X and which on Y for pcolormesh
+            # Assuming axis_names[0] is Y and axis_names[1] is X for convention with meshgrid.
             y_vals, x_vals = self.axes[axis_names[0]], self.axes[axis_names[1]]
+            # Ensure data shape matches (len(y_vals), len(x_vals)) for pcolormesh
+            if data.shape != (len(y_vals), len(x_vals)):
+                logging.warning(f"Data shape {data.shape} does not match expected 2D axis shape ({len(y_vals)}, {len(x_vals)}). Check data processing.")
             c = ax.pcolormesh(x_vals, y_vals, data, shading='gouraud')
             fig.colorbar(c, ax=ax, label=f"{stat.capitalize()} of {param_to_plot}")
             ax.set_xlabel(axis_names[1])
@@ -421,6 +477,7 @@ class Experiment:
         
         ax.set_title(f"{self.description}:\n{analysis_name} - {param_to_plot}")
         ax.grid(True, linestyle=':')
+        plt.tight_layout() # Ensure layout is tight for all plots
         return ax
 
     def plot_3d(self, analysis_name: str, stat: str = 'mean'):
@@ -438,12 +495,13 @@ class Experiment:
 
         data = self.results[analysis_name][stat]
         axis_names = list(self.axes.keys())
-        x, y, z = np.meshgrid(*self.axes.values(), indexing='ij')
+        # Meshgrid with 'ij' indexing matches numpy's array indexing (row, col, depth)
+        x_mesh, y_mesh, z_mesh = np.meshgrid(*self.axes.values(), indexing='ij')
 
         fig = go.Figure(data=go.Scatter3d(
-            x=x.flatten(),
-            y=y.flatten(),
-            z=z.flatten(),
+            x=x_mesh.flatten(),
+            y=y_mesh.flatten(),
+            z=z_mesh.flatten(),
             mode='markers',
             marker=dict(
                 size=5,

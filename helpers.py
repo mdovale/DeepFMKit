@@ -5,7 +5,7 @@ import numpy as np
 from scipy.special import jv
 from scipy.special import jv
 from scipy.linalg import inv
-from scipy.constants import pi, c 
+from scipy.constants import pi, c
 
 def set_laser_df_for_effect(laser: LaserConfig, ifo: InterferometerConfig, m):
     ref_arml = ifo.ref_arml
