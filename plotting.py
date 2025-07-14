@@ -22,7 +22,7 @@ default_rc = {
         '#FF69B4', '#FF4500', '#1E90FF', '#8A2BE2', '#FFA07A', '#8B0000'
     ]),
 }
-plt.rcParams.update(default_rc)
+# plt.rcParams.update(default_rc)
 
 legend_params = {
     'loc': 'best',
@@ -104,7 +104,10 @@ def autoscale_y(ax, margin=0.1):
 
     ax.set_ylim(bot, top)
 
-def dfm_axes():
+def dfm_axes(figsize=None):
+    if figsize is None:
+        figsize = figsize(2)
+
     fig1, (ax1, ax2, ax3, ax4, ax5, ax6) = plt.subplots(6,
                                                    figsize=figsize(2),
                                                    dpi=1 * 300,

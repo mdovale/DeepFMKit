@@ -8,7 +8,6 @@ import pandas as pd
 import logging
 import matplotlib.pyplot as plt
 from scipy.integrate import cumulative_trapezoid
-plt.rcParams.update(default_rc)
 from typing import Callable, Optional, Dict, Any
 
 class LaserConfig:

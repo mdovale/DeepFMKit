@@ -647,46 +647,66 @@ class DeepFitFramework():
         if pm == True:
             log_plot(self.f, displacement_req(self.fits[fit].f, 1e-12, 3e-3), ax, title, xlabel, ylabel, "1 pm")
 
-    def plot(self, labels=None, xrange=None):
-        """Plot the existing fit data for the specified `labels`,
-        or plot all of the existing fit data, in the specified `xrange`,
-        or in the entire range.
-        """
-        self.fig, (ax1, ax2, ax3, ax4, ax5, ax6) = dfm_axes()
-
-        if labels is None:
-            for k in self.fits:
-                ax6.semilogy(self.fits[k].time, self.fits[k].ssq)
-                ax5.plot(self.fits[k].time, self.fits[k].dc)
-                ax4.plot(self.fits[k].time, self.fits[k].amp)
-                ax3.plot(self.fits[k].time, self.fits[k].m)
-                ax2.plot(self.fits[k].time, self.fits[k].phi)
-                ax1.plot(self.fits[k].time, self.fits[k].psi, label=str(k))
-        else:
-            for k in labels:
-                ax6.semilogy(self.fits[k].time, self.fits[k].ssq)
-                ax5.plot(self.fits[k].time, self.fits[k].dc)
-                ax4.plot(self.fits[k].time, self.fits[k].amp)
-                ax3.plot(self.fits[k].time, self.fits[k].m)
-                ax2.plot(self.fits[k].time, self.fits[k].phi)
-                ax1.plot(self.fits[k].time, self.fits[k].psi, label=str(k))
-
-        if xrange is not None:
-            ax1.set_xlim(xrange)
-            ax2.set_xlim(xrange)
-            ax3.set_xlim(xrange)
-            ax4.set_xlim(xrange)
-            ax5.set_xlim(xrange)
-            ax6.set_xlim(xrange)
-            autoscale_y(ax1)
-            autoscale_y(ax2)
-            autoscale_y(ax3)
-            autoscale_y(ax4)
-            autoscale_y(ax5)
-            autoscale_y(ax6)
+    def plot(self, labels=None, which=None, figsize=None, xrange=None, *args, **kwargs):
+        """Plot selected fit data for the specified `labels`, or all if None.
         
-        self.fig.tight_layout()
-        return (ax1, ax2, ax3, ax4, ax5, ax6)
+        Parameters
+        ----------
+        which : list of str or None
+            Subset of ['ssq', 'dc', 'amp', 'm', 'psi'] to plot. If None, all are plotted.
+        labels : list of str or None
+            Keys in self.fits to plot. If None, plots all.
+        xrange : tuple or None
+            X-axis limits to apply to all plots.
+
+        Returns
+        -------
+        axes : list of matplotlib.axes.Axes
+            The list of axes created in the same order as `which`.
+        """
+        if which is None:
+            which = ['psi', 'phi', 'm', 'amp', 'dc', 'ssq']
+        elif isinstance(which, str):
+            which = [which]
+        valid_keys = ['psi', 'phi', 'm', 'amp', 'dc', 'ssq']
+        which = [w for w in which if w in valid_keys]
+        
+        n = len(which)
+        self.fig, axs = plt.subplots(n, 1, figsize=figsize, sharex=True)
+        if n == 1:
+            axs = [axs]  # make iterable if only one axis
+
+        key_to_ax = dict(zip(which, axs))
+        selected_labels = labels if labels is not None else self.fits.keys()
+
+        for k in selected_labels:
+            fit = self.fits[k]
+            for key in which:
+                ax = key_to_ax[key]
+                if key == 'psi':
+                    ax.plot(fit.time, fit.psi, *args, **kwargs)
+                elif key == 'phi':
+                    ax.plot(fit.time, fit.phi, label=str(k), *args, **kwargs)
+                elif key == 'm':
+                    ax.plot(fit.time, fit.m, *args, **kwargs)
+                elif key == 'amp':
+                    ax.plot(fit.time, fit.amp, *args, **kwargs)
+                elif key == 'dc':
+                    ax.plot(fit.time, fit.dc, *args, **kwargs)
+                elif key == 'ssq':
+                    ax.semilogy(fit.time, fit.ssq, *args, **kwargs)
+
+        for key, ax in key_to_ax.items():
+            ax.set_ylabel(key)
+            if xrange is not None:
+                ax.set_xlim(xrange)
+                autoscale_y(ax)
+            if key == 'psi':
+                ax.legend()
+
+        axs[-1].set_xlabel("Time")
+        self.fig.align_ylabels()
+        return axs
 
     def plot_diff(self, label1, label2, xrange=None):
         """Plot the absolute difference between the fit 
