@@ -642,7 +642,7 @@ class DeepFitFramework():
         if pm == True:
             log_plot(self.f, displacement_req(self.fits[fit].f, 1e-12, 3e-3), ax, title, xlabel, ylabel, "1 pm")
 
-    def plot(self, labels=None, which=None, figsize=None, xrange=None, styles=None, *args, **kwargs):
+    def plot(self, labels=None, which=None, figsize=None, dpi=150, xrange=None, styles=None, *args, **kwargs):
         """Plot selected fit data for the specified `labels`, or all if None.
 
         Parameters
@@ -669,7 +669,7 @@ class DeepFitFramework():
         which = [w for w in which if w in valid_keys]
 
         n = len(which)
-        self.fig, axs = plt.subplots(n, 1, figsize=figsize, sharex=True)
+        self.fig, axs = plt.subplots(n, 1, figsize=figsize, sharex=True, dpi=dpi)
         if n == 1:
             axs = [axs]
 
@@ -719,79 +719,153 @@ class DeepFitFramework():
         else:
             return axs
 
-    def plot_diff(self, label1, label2, xrange=None):
-        """Plot the absolute difference between the fit 
-        parameters of the specified two fits.
+    def plot_diff(self, label1, label2, which=None, figsize=None, dpi=150, xrange=None, *args, **kwargs):
+        """Plot the difference between the fit parameters of the two specified DeepFitObject.
+
+        Parameters
+        ----------
+        label1 : str
+            Label of the first fit in self.fits.
+        label2 : str
+            Label of the second fit in self.fits.
+        which : list of str or None
+            Subset of ['ssq', 'dc', 'amp', 'm', 'psi', 'phi'] to plot. If None, all are plotted.
+        xrange : tuple or None
+            X-axis limits to apply to all plots.
+
+        Returns
+        -------
+        axes : list of matplotlib.axes.Axes
+            The list of axes created in the same order as `which`.
         """
+        if which is None:
+            which = ['psi', 'phi', 'm', 'amp', 'dc', 'ssq']
+        elif isinstance(which, str):
+            which = [which]
+        valid_keys = ['psi', 'phi', 'm', 'amp', 'dc', 'ssq']
+        which = [w for w in which if w in valid_keys]
 
-        self.fig, (ax1, ax2, ax3, ax4, ax5, ax6) = dfm_axes()
+        n = len(which)
+        self.fig, axs = plt.subplots(n, 1, figsize=figsize, sharex=True, dpi=dpi)
+        if n == 1:
+            axs = [axs]
 
-        a = self.fits[label1].time.shape[0]
-        b = self.fits[label2].time.shape[0]
-        c = a
+        key_to_ax = dict(zip(which, axs))
+        fit1 = self.fits[label1]
+        fit2 = self.fits[label2]
+        c = min(fit1.time.shape[0], fit2.time.shape[0])
+        t = fit1.time[:c]
 
-        if b < a:
-            c = b
+        for key in which:
+            ax = key_to_ax[key]
+            y1 = getattr(fit1, key)[:c]
+            y2 = getattr(fit2, key)[:c]
+            diff = y1 - y2
 
-        ax6.semilogy(self.fits[label1].time[:c], self.fits[label1].ssq[:c] - self.fits[label2].ssq[:c])
-        ax5.plot(self.fits[label1].time[:c], self.fits[label1].dc[:c]      - self.fits[label2].dc[:c])
-        ax4.plot(self.fits[label1].time[:c], self.fits[label1].amp[:c]     - self.fits[label2].amp[:c])
-        ax3.plot(self.fits[label1].time[:c], self.fits[label1].m[:c]       - self.fits[label2].m[:c])
-        ax2.plot(self.fits[label1].time[:c], self.fits[label1].phi[:c]     - self.fits[label2].phi[:c])
-        ax1.plot(self.fits[label1].time[:c], self.fits[label1].psi[:c]     - self.fits[label2].psi[:c], label=label1+'-'+label2)
+            if key == 'ssq':
+                ax.semilogy(t, np.abs(diff), label=f"{label1}-{label2}", *args, **kwargs)
+                ax.set_ylabel('SSQ diff')
+            elif key == 'dc':
+                ax.plot(t, diff, label=f"{label1}-{label2}", *args, **kwargs)
+                ax.set_ylabel('dc diff (V)')
+            elif key == 'amp':
+                ax.plot(t, diff, label=f"{label1}-{label2}", *args, **kwargs)
+                ax.set_ylabel(r'$C$ diff (V)')
+            elif key == 'm':
+                ax.plot(t, diff, label=f"{label1}-{label2}", *args, **kwargs)
+                ax.set_ylabel(r'$m$ diff (rad)')
+            elif key == 'phi':
+                ax.plot(t, diff, label=f"{label1}-{label2}", *args, **kwargs)
+                ax.set_ylabel(r'$\Phi$ diff (rad)')
+            elif key == 'psi':
+                ax.plot(t, diff, label=f"{label1}-{label2}", *args, **kwargs)
+                ax.set_ylabel(r'$\Psi$ diff (rad)')
 
-        ax1.legend(loc='upper right')
-        
-        if xrange is not None:
-            ax1.set_xlim(xrange)
-            ax2.set_xlim(xrange)
-            ax3.set_xlim(xrange)
-            ax4.set_xlim(xrange)
-            ax5.set_xlim(xrange)
-            ax6.set_xlim(xrange)
-            autoscale_y(ax1)
-            autoscale_y(ax2)
-            autoscale_y(ax3)
-            autoscale_y(ax4)
-            autoscale_y(ax5)
-            autoscale_y(ax6)
+        for ax in axs:
+            if xrange is not None:
+                ax.set_xlim(xrange)
+                autoscale_y(ax)
 
+        axs[-1].set_xlabel("Time (s)")
+        self.fig.align_ylabels()
         self.fig.tight_layout()
 
-    def plot_comparison(self, label1, label2, xrange=None):
-        """Plot two channels for comparison.
+        return axs if len(axs) > 1 else axs[0]
+
+    def plot_comparison(self, label1, label2, which=None, figsize=None, dpi=150, xrange=None, *args, **kwargs):
+        """Plot two DeepFitObject overlaid for direct visual comparison.
+
+        Parameters
+        ----------
+        label1 : str
+            Label of the first DeepFitObject.
+        label2 : str
+            Label of the second DeepFitObject.
+        which : list of str or None
+            Subset of ['ssq', 'dc', 'amp', 'm', 'psi', 'phi'] to plot. If None, all are plotted.
+        xrange : tuple or None
+            X-axis limits to apply to all plots.
+
+        Returns
+        -------
+        axes : list of matplotlib.axes.Axes
+            The list of axes created in the same order as `which`.
         """
+        if which is None:
+            which = ['psi', 'phi', 'm', 'amp', 'dc', 'ssq']
+        elif isinstance(which, str):
+            which = [which]
+        valid_keys = ['psi', 'phi', 'm', 'amp', 'dc', 'ssq']
+        which = [w for w in which if w in valid_keys]
 
-        self.fig, (ax1, ax2, ax3, ax4, ax5, ax6) = dfm_axes()           
+        n = len(which)
+        self.fig, axs = plt.subplots(n, 1, figsize=figsize, sharex=True, dpi=dpi)
+        if n == 1:
+            axs = [axs]
 
-        ax6.semilogy(self.fits[label1].time, self.fits[label1].ssq)
-        ax5.plot(self.fits[label1].time, self.fits[label1].dc)
-        ax4.plot(self.fits[label1].time, self.fits[label1].amp)
-        ax3.plot(self.fits[label1].time, self.fits[label1].m)
-        ax2.plot(self.fits[label1].time, self.fits[label1].phi)
-        ax1.plot(self.fits[label1].time, self.fits[label1].psi, label=label1)
+        key_to_ax = dict(zip(which, axs))
+        fit1 = self.fits[label1]
+        fit2 = self.fits[label2]
 
-        ax6.semilogy(self.fits[label2].time, self.fits[label2].ssq, linestyle='dashed')
-        ax5.plot(self.fits[label2].time, self.fits[label2].dc, linestyle='dashed')
-        ax4.plot(self.fits[label2].time, self.fits[label2].amp, linestyle='dashed')
-        ax3.plot(self.fits[label2].time, self.fits[label2].m, linestyle='dashed')
-        ax2.plot(self.fits[label2].time, self.fits[label2].phi, linestyle='dashed')
-        ax1.plot(self.fits[label2].time, self.fits[label2].psi, linestyle='dashed', label=label2)
+        for key in which:
+            ax = key_to_ax[key]
+            t1 = fit1.time
+            t2 = fit2.time
+            y1 = getattr(fit1, key)
+            y2 = getattr(fit2, key)
 
-        ax1.legend(loc='upper right')
-        
-        if xrange is not None:
-            ax1.set_xlim(xrange)
-            ax2.set_xlim(xrange)
-            ax3.set_xlim(xrange)
-            ax4.set_xlim(xrange)
-            ax5.set_xlim(xrange)
-            ax6.set_xlim(xrange)
-            autoscale_y(ax1)
-            autoscale_y(ax2)
-            autoscale_y(ax3)
-            autoscale_y(ax4)
-            autoscale_y(ax5)
-            autoscale_y(ax6)
-        
+            if key == 'ssq':
+                ax.semilogy(t1, y1, label=label1, *args, **kwargs)
+                ax.semilogy(t2, y2, linestyle='dashed', label=label2, *args, **kwargs)
+                ax.set_ylabel('SSQ')
+            elif key == 'dc':
+                ax.plot(t1, y1, label=label1, *args, **kwargs)
+                ax.plot(t2, y2, linestyle='dashed', label=label2, *args, **kwargs)
+                ax.set_ylabel('dc (V)')
+            elif key == 'amp':
+                ax.plot(t1, y1, label=label1, *args, **kwargs)
+                ax.plot(t2, y2, linestyle='dashed', label=label2, *args, **kwargs)
+                ax.set_ylabel(r'$C$ (V)')
+            elif key == 'm':
+                ax.plot(t1, y1, label=label1, *args, **kwargs)
+                ax.plot(t2, y2, linestyle='dashed', label=label2, *args, **kwargs)
+                ax.set_ylabel(r'$m$ (rad)')
+            elif key == 'phi':
+                ax.plot(t1, y1, label=label1, *args, **kwargs)
+                ax.plot(t2, y2, linestyle='dashed', label=label2, *args, **kwargs)
+                ax.set_ylabel(r'$\Phi$ (rad)')
+            elif key == 'psi':
+                ax.plot(t1, y1, label=label1, *args, **kwargs)
+                ax.plot(t2, y2, linestyle='dashed', label=label2, *args, **kwargs)
+                ax.set_ylabel(r'$\Psi$ (rad)')
+
+        for ax in axs:
+            if xrange is not None:
+                ax.set_xlim(xrange)
+                autoscale_y(ax)
+
+        axs[-1].set_xlabel("Time (s)")
+        self.fig.align_ylabels()
         self.fig.tight_layout()
+
+        return axs if len(axs) > 1 else axs[0]
