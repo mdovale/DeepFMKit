@@ -43,40 +43,36 @@ The following example demonstrates the primary workflow: creating a simulation, 
 ```python
 import DeepFMKit.core as dfm
 import matplotlib.pyplot as plt
-import numpy as np
-import scipy.constants as sc
 
 # Instantiate the main framework
 dff = dfm.DeepFitFramework()
 
 # --- 1. Define the Laser Source ---
-laser_config = dfm.LaserConfig(label="main_laser")
-laser_config.f_mod = 1000 # Modulation frequency (Hz)
+laser = dfm.LaserConfig(label="main_laser")
+laser.f_mod = 1000 # Modulation frequency (Hz)
 
 # --- 2. Define the Main Interferometer ---
-main_ifo_config = dfm.InterferometerConfig(label="dynamic_ifo")
-main_ifo_config.ref_arml = 0.1 # Reference arm length (m)
-main_ifo_config.meas_arml = 0.3 # Measurement arm length (m)
+ifo = dfm.InterferometerConfig(label="dynamic_ifo")
+ifo.ref_arml = 0.1 # Reference arm length (m)
+ifo.meas_arml = 0.3 # Measurement arm length (m)
 
 # --- 3. Set Modulation Depth by Adjusting Laser's `df` ---
 m_target = 6.0 # Target effective modulation index (rad)
-opd = main_ifo_config.meas_arml - main_ifo_config.ref_arml # Optical pathlength difference (m)
-df_required = (m_target * sc.c) / (2 * np.pi * opd) # Required laser modulation amplitude (Hz)
-laser_config.df = df_required
+dfm.set_laser_df_for_effect(laser, ifo, m_target)
 
 # --- 4. Compose the Main Channel ---
-main_label = "dynamic_channel"
-main_channel = dfm.DFMIObject(
-    label=main_label,
-    laser_config=laser_config,
-    ifo_config=main_ifo_config,
-    f_samp=int(200e3) # Sampling frequency (Hz)
+label = "dynamic_channel"
+sim_obj = dfm.DFMIObject(
+    label=label,
+    laser_config=laser,
+    ifo_config=ifo,
+    f_samp=200e3 # Sampling frequency (Hz)
 )
-dff.sims[main_label] = main_channel
+dff.load_sim(sim_obj)
 
 # --- 6. Simulate ---
 dff.simulate(
-    main_label=main_label,
+    main_label=label,
     n_seconds=10, # Simulation length in seconds
     mode='snr',
     snr_db=40
@@ -84,13 +80,12 @@ dff.simulate(
 
 # --- 7. Analyze and Plot ---
 print("\n--- Configuration Summaries ---")
-dff.sims[main_label].info()
+dff.sims[label].info()
 
 print("\n--- Fitting Channels ---")
-dff.fit(main_label)
+dff.fit(label)
 
 print("\n--- Plotting Results ---")
-ax = dff.plot()
-ax[0].legend()
+axs = dff.plot()
 plt.show()
 ```
