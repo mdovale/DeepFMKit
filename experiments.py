@@ -9,6 +9,8 @@ import os
 import copy
 from tqdm import tqdm
 from typing import Optional, Callable, Dict, Any, List, Union
+import pickle
+
 
 def _run_single_trial(job_packet: tuple) -> dict:
     """
@@ -106,7 +108,7 @@ class Experiment:
     to the experiment. This pattern ensures all necessary code and data can be safely 
     "pickled" and sent to worker processes, avoiding AttributeError on __main__.
     """
-    def __init__(self, description: str = "Unnamed Experiment"):
+    def __init__(self, description: str = "Unnamed Experiment", filename: Optional[str] = None):
         self.description = description
         self.axes: Dict[str, np.ndarray] = {}
         self.static_params: Dict[str, Any] = {}
@@ -118,6 +120,9 @@ class Experiment:
         self.n_fit_buffers_per_trial: int = 10
         self.f_samp: int = 200000
         self.results: Optional[Dict[str, Any]] = None # To store aggregated results after run()
+
+        if filename is not None:
+            self.load_results(filename)
 
     def _validate_param_name(self, name: str):
         """Internal helper to validate if a parameter name is expected by the factory."""
@@ -265,8 +270,22 @@ class Experiment:
         # plus the internal _exp_point_idx and _exp_trial_idx
         filtered_params = {k: v for k, v in params.items() if k in self._expected_params_keys or k.startswith('_exp_')}
         return filtered_params
+    
+    def save_results(self, filename: str):
+        """Save current experiment results to disk."""
+        if self.results is None:
+            raise RuntimeError("No results to save. Run the experiment first.")
+        with open(filename, 'wb') as f:
+            pickle.dump(self.results, f)
+        logging.info(f"Experiment results saved to {filename}")
 
-    def run(self, n_cores: Optional[int] = None) -> Dict[str, Any]:
+    def load_results(self, filename: str):
+        """Load experiment results from disk into the object."""
+        with open(filename, 'rb') as f:
+            self.results = pickle.load(f)
+        logging.info(f"Experiment results loaded from {filename}")
+
+    def run(self, n_cores: Optional[int] = None, filename: Optional[str] = None) -> Dict[str, Any]:
         """
         Executes the defined experiment, parallelizing over all individual trials.
 
@@ -430,7 +449,12 @@ class Experiment:
                 stats_dict['worst'] = worst_case
 
         logging.info("Experiment run complete. Results aggregated.")
-        self.results = results # Store results for potential plotting/inspection
+        self.results = results  # Store results for potential plotting/inspection
+
+        if filename is not None:
+            self.save_results(filename)
+            logging.info(f"Results saved to: {filename}")
+
         return results
     
     def plot(self, analysis_name: str, param_to_plot: str, stat: str = 'mean', ax=None):
