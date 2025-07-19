@@ -6,7 +6,10 @@ import pyplnoise
 import pandas as pd
 import logging
 import matplotlib.pyplot as plt
+from matplotlib import cm
+from matplotlib.colors import Normalize
 from scipy.integrate import cumulative_trapezoid
+from scipy.special import jv
 from typing import Callable, Optional, Dict, Any
 
 class LaserConfig:
@@ -320,6 +323,41 @@ DFMI Channel Configuration: '{self.label}'
 ============================================================
 """
         logging.info(info_str)
+
+    def plot_harmonics(self, figsize=(3.375, 3.375), dpi=150, N: int = 20, ax: plt.Axes = None) -> plt.Axes:
+        if ax is None:
+            fig = plt.figure(figsize=figsize, dpi=dpi)
+            ax = fig.add_subplot(111, polar=True)
+
+        m = self.m
+        phi = self.ifo.phi
+        psi = self.laser.psi
+        C = self.laser.amp * self.laser.visibility
+
+        n = np.arange(1, N + 1)
+        phase_term = -phi + n * np.pi / 2.0 + n * psi
+        complex_amplitudes = C * jv(n, m) * np.exp(1j * phase_term)
+        
+        magnitudes = np.abs(complex_amplitudes)
+        angles = np.angle(complex_amplitudes)
+
+        # Normalize magnitudes to [0, 1] for colormap
+        norm = Normalize(vmin=np.min(magnitudes), vmax=np.max(magnitudes))
+        cmap = cm.get_cmap('viridis')
+
+        for i in range(N):
+            color = cmap(norm(magnitudes[i]))
+            ax.plot([angles[i], angles[i]], [0, magnitudes[i]], color=color, lw=1.5)
+            ax.plot(angles[i], magnitudes[i], 'o', color=color, ms=4)
+            ax.text(angles[i], magnitudes[i] + 0.03 * C, f'{i+1}',
+                    ha='center', va='bottom', size=8, c='k')
+
+        ax.set_theta_zero_location('E')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.yaxis.set_ticklabels([])
+        ax.tick_params(pad=0)  # try values like 5, 10, 15
+
+        return ax
 
 class SignalGenerator:
     """
