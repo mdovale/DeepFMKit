@@ -350,11 +350,11 @@ class StandardNLSFitter(BaseFitter):
         # --- 0. Unpack Configuration ---
         n = self.config['n']
         ndata = self.config.get('ndata', 10)
+        if 'ndata' in kwargs:
+            ndata = kwargs['ndata']
+            kwargs.pop('ndata')
         
-        # --- THIS IS THE KEY CHANGE ---
-        # The mode of operation is now controlled by a kwarg.
         parallel = kwargs.get('parallel', True)
-
         init_a = kwargs.get('init_a', 1.6)
         init_m = kwargs.get('init_m', 6.0)
         init_psi = kwargs.get('init_psi', 0.0)
