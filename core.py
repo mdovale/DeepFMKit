@@ -4,6 +4,7 @@ from .data import *
 from .physics import *
 from .dsp import *
 from .fitters import *
+from .helpers import *
 
 import numpy as np
 import scipy.constants as sc
@@ -483,8 +484,8 @@ class DeepFitFramework():
         # The base config for all fitters
         fit_config = {'n': n_cycles}
         # Add method-specific configs
-        if method in ['nls', 'wdfmi_nls']:
-            fit_config['ndata'] = kwargs.get('ndata', 10)
+        # if method in ['nls', 'wdfmi_nls']:
+        #     fit_config['ndata'] = kwargs.get('ndata', 10)
         
         # --- 3. Instantiate and Run the Fitter ---
         fitter_args = {'main_raw': main_raw}
