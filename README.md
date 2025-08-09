@@ -13,7 +13,7 @@ The novelty of DeepFMKit lies in its integrated, object-oriented approach. It co
 *   **High-Fidelity Physics Engine:** Simulate realistic DFMI signals with a model that includes prescribed noise sources, dynamic path length changes, and arbitrary laser modulation waveforms.
 *   **Comprehensive Noise Modeling:** Inject realistic, colored noise based on user-defined Amplitude Spectral Densities (ASDs) for laser frequency, laser amplitude, modulation amplitude, and arm length fluctuations.
 *   **Modular & Interchangeable Fitters:**
-    *   **NLS Fitter:** A highly optimized, parallelized Non-Linear Least Squares (NLS) fitter working on the frequency domain.
+    *   **NLS Fitter:** A highly optimized, parallelized Non-Linear Least Squares (NLS) fitter working in the frequency domain.
     *   **EKF Fitter:** A time-domain Extended Kalman Filter (EKF) for real-time state tracking and analysis of dynamic systems.
 *   **High-Throughput Experimentation:** A declarative framework for defining and running large-scale, parallelized parameter sweeps and Monte Carlo simulations to systematically characterize system performance.
 *   **Data Handling & Visualization:** A suite of tools for loading/saving data, managing experimental configurations, and plotting results.
@@ -145,7 +145,7 @@ plt.show()
 
 The Experiment framework (experiments.py) is designed for large-scale studies. It automates the process of running thousands of "simulate-and-analyze" trials in parallel.
 
-1. Create an ExperimentFactory: This class contains your logic for setting up a single trial. For example:
+1. Create an ExperimentFactory in factories.py: This class contains your logic for setting up a single trial. For example:
 
 ```python
 class VairableAmplitudeOffset(ExperimentFactory):
@@ -180,7 +180,11 @@ class VairableAmplitudeOffset(ExperimentFactory):
 2. Define and run the Experiment:
 
 ```python
+from deepfmkit.experiments import Experiment
 from deepfmkit.factories import VairableAmplitudeOffset
+
+import numpy as np
+from functools import partial
 
 def amplitude_random_offset_generator(nominal_amplitude: float, relative_noise_std: float) -> float:
     """
