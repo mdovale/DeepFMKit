@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepfmkit"
+version = "1.0.0"
+description = "A Python toolkit for Deep Frequency Modulation Interferometry."
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Miguel Dovale", email = "spectools@pm.me" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: BSD License",
+  "Operating System :: OS Independent",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = ["numpy", "scipy", "pandas", "matplotlib", "numba", "tqdm"]
+
+[project.optional-dependencies]
+dev = ["pytest", "build", "twine", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/mdovale/DeepFMKit"
+Repository = "https://github.com/mdovale/DeepFMKit"
+Issues = "https://github.com/mdovale/DeepFMKit/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["deepfmkit*"]
+exclude = ["tests*", "notebooks*"]
+ 
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint.isort]
+known-first-party = ["deepfmkit"]
+
+[tool.ruff.format]
+quote-style = "double"
