@@ -117,7 +117,7 @@ def test_generate_ideal_signal_matches_formula(basic_sim_config):
     # The simulation produces v(t) = (DC+noise_amp)*(1 + V*cos(...)). For V=1, DC=AC.
     # The term `laser.amp` in the simulation corresponds to the DC offset.
     dc_offset = cfg.laser.amp
-    ac_amplitude = cfg.laser.amp * cfg.laser.visibility
+    ac_amplitude = cfg.laser.amp * cfg.ifo.visibility
 
     phase_mod = cfg.m * np.cos(2 * np.pi * cfg.laser.fm * t + cfg.laser.psi)
     total_phase = cfg.ifo.phi + phase_mod

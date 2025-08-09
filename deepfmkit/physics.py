@@ -64,6 +64,8 @@ class IfoConfig:
     ----------
     label : str
         An identifier for this interferometer configuration (e.g., "main_ifo").
+    visibility : float
+        The visibility (contrast) of the interference fringes, from 0 to 1.
     phi : float
         The static interferometric phase offset in radians. This represents
         the phase difference at the carrier frequency for the static part
@@ -87,6 +89,7 @@ class IfoConfig:
     """
 
     label: str = "IFO"
+    visibility: float = 1.0
 
     # --- Static Path Properties ---
     phi: float = 0.0  # Interferometer phase
@@ -104,6 +107,9 @@ class IfoConfig:
 
     def __post_init__(self):
         """Validates the configuration after initialization."""
+        if not (0.0 <= self.visibility <= 1.0):
+            raise ValueError("visibility must be between 0.0 and 1.0 inclusive.")
+        
         # --- Static Path Properties ---
         if not math.isfinite(self.phi):
             raise ValueError("phi must be a finite float (radians).")
@@ -147,8 +153,6 @@ class LaserConfig:
     amp : float
         The mean amplitude of the interferometric signal in volts. This is an
         effective parameter combining laser power, photodetector gain, etc.
-    visibility : float
-        The visibility (contrast) of the interference fringes, from 0 to 1.
     fm : float
         The frequency of the laser's frequency modulation in Hz.
     df : float
@@ -178,7 +182,6 @@ class LaserConfig:
     # --- Core Optical Properties ---
     wavelength: float = 1.064e-6
     amp: float = 1.0
-    visibility: float = 1.0
 
     # --- Modulation Properties ---
     fm: float = 1000.0
@@ -209,8 +212,6 @@ class LaserConfig:
             raise ValueError("modulation frequency fm cannot be negative.")
         if self.df < 0:
             raise ValueError("modulation amplitude df cannot be negative.")
-        if not (0.0 <= self.visibility <= 1.0):
-            raise ValueError("visibility must be between 0.0 and 1.0 inclusive.")
         if not callable(self.waveform_func):
             raise TypeError("waveform_func must be callable.")
         # noise ASDs (must be finite and ≥ 0)
@@ -510,13 +511,13 @@ DFMI Channel Configuration: '{self.label}'
   Modulation Freq:     {self.laser.fm} Hz
   Modulation Amp (df): {self.laser.df / 1e9:.3f} GHz
   Signal Amplitude:    {self.laser.amp:.2f}
-  Visibility:          {self.laser.visibility:.2f}
 
---- Interferometer Path ('{self.ifo.label}') ---
+--- Interferometer ('{self.ifo.label}') ---
   Reference Arm:       {self.ifo.ref_arml:.4f} m
   Measurement Arm:     {self.ifo.meas_arml:.4f} m
   OPD (delta_l):       {(self.ifo.meas_arml - self.ifo.ref_arml) * 100:.2f} cm
   Dynamic Motion Amp:  {self.ifo.arml_mod_amp * 1e9:.2f} nm
+  Visibility:          {self.ifo.visibility:.2f}
 
 --- Derived & Simulation Parameters ---
   Modulation Depth (m):  {self.m:.4f} rad
@@ -564,7 +565,7 @@ DFMI Channel Configuration: '{self.label}'
         m = self.m
         phi = self.ifo.phi
         psi = self.laser.psi
-        C = self.laser.amp * self.laser.visibility
+        C = self.laser.amp * self.ifo.visibility
         return plot_signal_harmonics(
             phi, psi, m, C, N=N, figsize=figsize, dpi=dpi, ax=ax, ylim=ylim
         )
@@ -592,7 +593,7 @@ DFMI Channel Configuration: '{self.label}'
         """
         m = self.m
         psi = self.laser.psi
-        C = self.laser.amp * self.laser.visibility
+        C = self.laser.amp * self.ifo.visibility
 
         return plot_signal_harmonics_vs_phi(psi, m, C, N=N, phi_range=phi_range)
 
@@ -964,7 +965,7 @@ class SignalGenerator:
         ifo = sim_config.ifo
 
         A = laser.amp
-        C = laser.visibility
+        C = ifo.visibility
         omega_mod = 2 * np.pi * laser.fm
 
         phitot = sim_config.m * np.cos(omega_mod * time_axis + laser.psi)
@@ -1294,7 +1295,7 @@ class SignalGenerator:
 
         amplitude_effective = laser.amp + noise_arrays.get("amplitude", 0.0)
         voltage_signal = amplitude_effective * (
-            1 + laser.visibility * np.cos(dfmi_phase)
+            1 + ifo.visibility * np.cos(dfmi_phase)
         )
 
         if is_dynamic:
