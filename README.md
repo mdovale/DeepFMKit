@@ -28,15 +28,32 @@ The novelty of DeepFMKit lies in its integrated, object-oriented approach. It co
 
 ### Installation
 
-1.  **Clone the repository:**
-    ```sh
-    git clone https://github.com/mdovale/DeepFMKit.git
-    cd DeepFMKit
-    ```
-2.  **Install the required packages.** It is highly recommended to use a virtual environment.
-    ```sh
-    pip install -r requirements.txt
-    ```
+You can either install directly from GitHub or clone the repository locally.  
+
+**Option 1 – Install directly from GitHub (latest version):**  
+```sh
+pip install git+https://github.com/mdovale/DeepFMKit.git
+```
+
+**Option 2 – Clone and install manually:**  
+1. **Clone this repository**
+   ```sh
+   git clone https://github.com/mdovale/DeepFMKit.git
+   cd DeepFMKit
+   ```
+
+2. **(Recommended) Create and activate a virtual environment**
+   ```sh
+   python -m venv .venv
+   source .venv/bin/activate     # On Windows: .venv\Scripts\activate
+   ```
+
+3. **Install dependencies**
+   ```sh
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
 
 ## Quick Start: A Complete Workflow
 

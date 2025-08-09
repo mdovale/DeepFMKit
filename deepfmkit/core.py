@@ -592,15 +592,14 @@ class DeepFrame:
         main_label : str
             The label of the `RawData` object in `self.raws` to be fit.
         method : str, optional
-            The fitting algorithm to use. Available methods: 'nls', 'ekf',
-            'wdfmi_nls', 'wdfmi_ortho', 'wdfmi_seq'. Defaults to 'nls'.
+            The fitting algorithm to use. Available methods: 'nls', 'ekf'.
+            Defaults to 'nls'.
         fit_label : str, optional
             The label for the output `FitData`. If None, a label is
             auto-generated. Defaults to None.
         **kwargs : Any
             Additional keyword arguments passed directly to the selected
-            fitter's `fit()` method. For W-DFMI methods, this must include
-            `witness_label`.
+            fitter's `fit()` method.
 
         Returns
         -------
@@ -652,13 +651,6 @@ class DeepFrame:
 
         # --- 3. Instantiate and Run the Fitter ---
         fitter_args = {"main_raw": main_raw}
-        if "wdfmi" in method:
-            witness_label = kwargs.get("witness_label")
-            if not witness_label or witness_label not in self.raws:
-                raise ValueError(
-                    f"W-DFMI method '{method}' requires a 'witness_label' argument."
-                )
-            fitter_args["witness_raw"] = self.raws[witness_label]
 
         fitter = FitterClass(fit_config)
         results_df = fitter.fit(**fitter_args, **kwargs)

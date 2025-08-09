@@ -189,11 +189,6 @@ def _run_single_trial(job_packet: Tuple) -> Dict[str, Any]:
         )
         if analysis["fitter_method"] in ["nls", "ekf"]:
             fitter_args["parallel"] = False
-        if (
-            "wdfmi" in analysis["fitter_method"]
-            or "hwdfmi" in analysis["fitter_method"]
-        ):
-            fitter_args["witness_label"] = "witness"  # Use the local label
 
         fitter_args["n"] = num_fit_buffers
         fitter_args["init_a"] = main_channel_sim.laser.amp

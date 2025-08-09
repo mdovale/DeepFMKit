@@ -80,8 +80,7 @@ class ExperimentFactory(ABC):
         -------
         dict
             A dictionary containing the configured physics objects. It should
-            typically include 'laser_config' and 'main_ifo_config', and may
-            optionally include 'witness_ifo_config' for W-DFMI setups.
+            include 'laser_config' and 'main_ifo_config'.
         """
         pass
 

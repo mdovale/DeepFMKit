@@ -53,8 +53,7 @@ from deepfmkit.data import RawData
 import os
 import math
 from multiprocessing import Pool
-from scipy.optimize import minimize, minimize_scalar, least_squares
-from scipy.integrate import cumulative_trapezoid
+from scipy.optimize import minimize_scalar
 from abc import ABC, abstractmethod
 import numpy as np
 import pandas as pd
@@ -166,90 +165,6 @@ def _calculate_fit_params(raw_obj: RawData, n: int) -> Tuple[int, float, int]:
         )
     nbuf = N // R
     return R, fs, nbuf
-
-
-def _get_phase_modulation_basis(
-    witness_raw: RawData, R: int, f_samp: float
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Processes a witness signal to extract a phase modulation basis waveform.
-
-    This helper function, used by W-DFMI fitters, takes the witness signal,
-    which is proportional to the instantaneous frequency modulation `fm(t)`,
-    and integrates it to get the phase modulation waveform `phi_mod(t)`.
-
-    Parameters
-    ----------
-    witness_raw : RawData
-        The raw data object for the witness channel.
-    R : int
-        The buffer size in samples (number of samples in one period).
-    f_samp : float
-        The sampling frequency in Hz.
-
-    Returns
-    -------
-    tuple[np.ndarray, np.ndarray]
-        A tuple containing:
-        - phi_mod_basis: The integrated, normalized phase modulation waveform.
-        - time_axis_buffer: The time axis corresponding to the buffer.
-    """
-    # Use the first buffer of the witness signal as the template
-    witness_buffer_raw = np.array(witness_raw.data.iloc[0:R]).flatten()
-    v_w_ac = witness_buffer_raw - np.mean(witness_buffer_raw)
-
-    # Witness voltage is proportional to fm(t).
-    # Correct for the sign inversion at the mid-fringe point and normalize.
-    fm_basis = -v_w_ac / np.max(np.abs(v_w_ac))
-
-    time_axis_buffer = np.arange(R) / f_samp
-    dt = time_axis_buffer[1] - time_axis_buffer[0]
-    phi_mod_basis = np.cumsum(fm_basis) * dt
-
-    return phi_mod_basis, time_axis_buffer
-
-
-def _get_total_laser_phase(
-    witness_raw: RawData, R: int, f_samp: float, f_ref: float
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Processes a heterodyne witness signal to extract the total laser phase.
-
-    This helper is for a hypothetical Heterodyne W-DFMI (HW-DFMI) algorithm.
-    It integrates the beatnote frequency `f_beat(t) = f_main(t) - f_ref` to
-    reconstruct the total phase of the main laser.
-
-    Parameters
-    ----------
-    witness_raw : RawData
-        The raw data object for the HW-DFMI witness channel. Its data is
-        assumed to be the instantaneous beatnote frequency in Hz.
-    R : int
-        The buffer size in samples.
-    f_samp : float
-        The sampling frequency in Hz.
-    f_ref : float
-        The frequency of the stable reference laser in Hz.
-
-    Returns
-    -------
-    tuple[np.ndarray, np.ndarray]
-        A tuple containing:
-        - phi_main: The reconstructed total phase of the main laser.
-        - time_axis_buffer: The time axis corresponding to the buffer.
-    """
-    # Use the first buffer of the witness signal as the template
-    # The data is assumed to be the frequency of the beatnote f_beat(t).
-    f_beat = np.array(witness_raw.data.iloc[0:R]).flatten()
-
-    time_axis_buffer = np.arange(R) / f_samp
-    dt = time_axis_buffer[1] - time_axis_buffer[0]
-
-    # Reconstruct the main laser's total phase by integrating its frequency.
-    # f_main(t) = f_beat(t) + f_ref.
-    # phi_main(t) = 2*pi * integral(f_main(t')) dt'.
-    # I'll use cumulative trapezoidal integration for better accuracy.
-    phi_main = 2 * np.pi * cumulative_trapezoid(f_beat + f_ref, dx=dt, initial=0)
-
-    return phi_main, time_axis_buffer
 
 
 class BaseFitter(ABC):
