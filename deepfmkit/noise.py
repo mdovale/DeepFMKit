@@ -58,7 +58,7 @@ References
 GENERATING LONG STREAMS OF $1/f^{alpha}$ NOISE
 S. PLASZCZYNSKI
 Fluctuation and Noise Letters 2007 07:01, R1-R13
-https://doi.org/10.1142/S0219477507003726
+https://doi.org/10.1142/S0219477507003635
 """
 
 from typing import Optional, Tuple

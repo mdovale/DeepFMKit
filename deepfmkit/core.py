@@ -64,7 +64,7 @@ class DeepFrame:
 
     Parameters
     ----------
-    sim_obj : SimConfig, optional
+    sim_config : SimConfig, optional
         A simulation configuration object to load upon initialization.
     raw_file : str, optional
         Path to a raw data file to load upon initialization.
@@ -93,7 +93,7 @@ class DeepFrame:
 
     def __init__(
         self,
-        sim_obj: Optional[SimConfig] = None,
+        sim_config: Optional[SimConfig] = None,
         raw_file: Optional[str] = None,
         fit_file: Optional[str] = None,
         raw_labels: Optional[List[str]] = None,
@@ -124,8 +124,8 @@ class DeepFrame:
         if self.fit_file is not None:
             self.load_fit(labels=fit_labels)
 
-        if sim_obj is not None:
-            self.add_sim(sim_obj)
+        if sim_config is not None:
+            self.add_sim(sim_config)
 
     def to_txt(self, filepath: str = "./", labels: Optional[List[str]] = None) -> None:
         """Saves fit data to text files in the standard DFMI format.

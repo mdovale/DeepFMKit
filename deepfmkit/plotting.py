@@ -712,7 +712,9 @@ def time_plot(
         ax.set_xlim(xrange)
         autoscale_y(ax)  # Uses the autoscale_y helper
 
-    ax.legend()
+    _, labels = ax.get_legend_handles_labels()
+    if any(label.strip() for label in labels):  # Only activate legend if labels exist
+        ax.legend()
     fig.tight_layout()
     return ax
 

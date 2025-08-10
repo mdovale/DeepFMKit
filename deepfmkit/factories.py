@@ -119,23 +119,27 @@ class StandardDFMIExperimentFactory(ExperimentFactory):
         Defaults to 0.1.
     """
 
-    def __init__(self, waveform_function: Callable, opd_main: float = 0.1):
-        if not callable(waveform_function):
+    def __init__(self, waveform_function: Callable, fm: float = 1e3, opd: float = 0.1):
+        self.waveform_function = waveform_function
+        self.fm = fm
+        self.opd = opd
+        
+        if not callable(self.waveform_function):
             raise TypeError("waveform_function must be a callable.")
-        self.waveform_func_to_use = waveform_function
-        self.opd_main = opd_main
-        if self.opd_main == 0:
-            raise ValueError("opd_main cannot be zero in the factory.")
+        if self.fm <=0:
+            raise ValueError("fm must be positive greater than zero.")
+        if self.opd <= 0:
+            raise ValueError("opd must be positive greater than zero.")
 
     def _get_expected_params_keys(self) -> Set[str]:
         """Declares the top-level parameters consumed by this factory's __call__ method."""
         return {
+            "fm",
             "m_main",
             "psi",
             "phi",
             "distortion_amp",
             "distortion_phase",
-            "waveform_kwargs",
         }
 
     def __call__(self, params: dict) -> dict:
@@ -148,14 +152,15 @@ class StandardDFMIExperimentFactory(ExperimentFactory):
             "distortion_phase": distortion_phase,
         }
         laser_config = physics.LaserConfig()
+        laser_config.fm = self.fm
         laser_config.psi = params.get("psi", 0)
         main_ifo_config = physics.IfoConfig(label="main_ifo")
         main_ifo_config.ref_arml = 0.1
-        main_ifo_config.meas_arml = main_ifo_config.ref_arml + self.opd_main
+        main_ifo_config.meas_arml = main_ifo_config.ref_arml + self.opd
         main_ifo_config.phi = params.get("phi", 0)
-        laser_config.waveform_func = self.waveform_func_to_use
+        laser_config.waveform_func = self.waveform_function
         laser_config.waveform_kwargs = waveform_kwargs
-        laser_config.df = (m_main * sc.c) / (2 * np.pi * self.opd_main)
+        laser_config.df = (m_main * sc.c) / (2 * np.pi * self.opd)
         return {"laser_config": laser_config, "main_ifo_config": main_ifo_config}
 
 
