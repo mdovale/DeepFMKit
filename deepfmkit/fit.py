@@ -129,7 +129,7 @@ def calculate_quadratures(
     return Q_data, I_data
 
 
-def coeffs(
+def compute_residual_jacobian_gradient(
     ndata: int, data: np.ndarray, param: np.ndarray, fit_params: List[str] = ALL_PARAMS
 ) -> Tuple[float, np.ndarray, np.ndarray]:
     """Calculates the SSQ, Jacobian (J^T*J), and gradient (J^T*r).
@@ -239,7 +239,7 @@ def ssqf(
     This lightweight version is used within the LMA loop when testing different
     damping parameters, as it avoids the expensive calculation of the Jacobian.
 
-    Parameters are identical to `coeffs`.
+    Parameters are identical to `compute_residual_jacobian_gradient`.
 
     Returns
     -------
@@ -325,7 +325,7 @@ def _run_lma_fit(
     parm = initial_guess.copy()
 
     # Calculate initial state
-    ssq0, JTJ_flat, gradient = coeffs(ndata, data, parm, fit_params)
+    ssq0, JTJ_flat, gradient = compute_residual_jacobian_gradient(ndata, data, parm, fit_params)
 
     for _ in range(MAX_LMA_STEPS):
         parm_old = parm.copy()
@@ -360,7 +360,7 @@ def _run_lma_fit(
 
         # An improvement was found, update parameters and calculate new state
         parm = best_parm_step
-        ssq0, JTJ_flat, gradient = coeffs(ndata, data, parm, fit_params)
+        ssq0, JTJ_flat, gradient = compute_residual_jacobian_gradient(ndata, data, parm, fit_params)
 
         # Check for convergence
         param_change = np.linalg.norm(np.array(parm) - np.array(parm_old))
