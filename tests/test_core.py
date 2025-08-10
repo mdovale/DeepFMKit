@@ -54,7 +54,7 @@ def test_deepframe_initialization(basic_sim_config):
     assert not dff.sims and not dff.raws and not dff.fits
 
     # 2. Test initialization with a SimConfig object
-    dff_with_sim = DeepFrame(sim_obj=basic_sim_config)
+    dff_with_sim = DeepFrame(sim_config=basic_sim_config)
     assert "test_sim" in dff_with_sim.sims
     assert dff_with_sim.sims["test_sim"] is basic_sim_config
 

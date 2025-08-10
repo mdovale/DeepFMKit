@@ -234,7 +234,7 @@ def test_experiment_full_integration_with_golden_file():
 
     # --- 2. Re-create the exact experiment configuration ---
     # Every parameter, especially the seed, must be identical.
-    factory = StandardDFMIExperimentFactory(waveform_function=shd, opd_main=0.05)
+    factory = StandardDFMIExperimentFactory(waveform_function=shd, opd=0.05)
 
     experiment = Experiment(description="2nd Harmonic Distortion", seed=29)
     experiment.set_config_factory(factory)
