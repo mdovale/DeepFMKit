@@ -1015,7 +1015,7 @@ class SignalGenerator:
         trial_num: int = 0,
         force_start_at_zero: bool = False
     ) -> Dict[str, Union[float, np.ndarray]]:
-        """Generates physically-scaled noise arrays for a simulation.
+        """Generates colored random noise arrays for a simulation.
 
         This function serves as a high-level factory for creating noise time-series
         based on physical specifications (Amplitude Spectral Density and alpha
@@ -1030,7 +1030,7 @@ class SignalGenerator:
         (up to the Nyquist frequency).
         RMS = ASD * sqrt(f_sample / 2).
 
-        - Colored Noise (0 < alpha <= 2): The `alpha_noise` generator is used,
+        - Colored Noise (0.01 <= alpha <= 2): The `alpha_noise` generator is used,
         which produces a basis signal whose two-sided PSD is 1.0 at 1 Hz.
         To scale this to the target one-sided ASD, a scaling factor is derived:
             - One-sided PSD = 2 * Two-sided PSD (for f>0).
@@ -1052,8 +1052,7 @@ class SignalGenerator:
             Defaults to 0.
         force_start_at_zero : bool, optional
             If True, subtracts the first sample from the entire generated series.
-            This acts as a crude high-pass filter and alters the low-frequency
-            spectral properties. It should be used with caution. Defaults to False.
+            Useful for some experiment.s
 
         Returns
         -------
@@ -1066,7 +1065,7 @@ class SignalGenerator:
         ------
         ValueError
             If an ASD is negative or an alpha value is outside the supported
-            range [0, 2].
+            range Union[0, [0.01, 2]].
         """
         num_samples = int(n_samples)
         if num_samples <= 0:
@@ -1159,7 +1158,7 @@ class SignalGenerator:
                 
             else:
                 raise ValueError(
-                    f"Alpha for '{name}' is invalid. Must be in [0, 2], got {alpha}."
+                    f"Alpha for '{name}' is invalid. Must be 0.0 or in [0.01, 2], got {alpha}."
                 )
 
             # Optional high-pass filtering for special cases.
