@@ -46,7 +46,7 @@ import pandas as pd
 import logging
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from scipy.integrate import cumulative_trapezoid
+from scipy.integrate import cumulative_trapezoid, quad
 from scipy.signal import decimate
 from typing import Callable, Optional, Dict, Any, Tuple, Union
 from dataclasses import dataclass, field
@@ -86,6 +86,12 @@ class IfoConfig:
     arml_n_alpha : float
         The exponent `alpha` for the 1/f^alpha power spectrum of the arm
         length noise.
+    s_n : float
+        The Amplitude Spectral Density (ASD) of electronic noise at 1 Hz,
+        in units of V/sqrt(Hz).
+    s_n_alpha : float
+        The exponent `alpha` for the 1/f^alpha power spectrum of the
+        electronic noise.
     """
 
     label: str = "IFO"
@@ -104,6 +110,8 @@ class IfoConfig:
     # --- Noise Properties ---
     arml_n: float = 0.0  # ASD of armlength noise (m/sqrt(Hz) @ 1 Hz)
     arml_n_alpha: float = 2.0  # Color of armlength noise (PSD \propto 1/f^alpha)
+    s_n: float = 0.0  # ASD of electronic noise (m/sqrt(Hz) @ 1 Hz)
+    s_n_alpha: float = 0.0 # Color of electronic noise (PSD \propto 1/f^alpha)
 
     def __post_init__(self):
         """Validates the configuration after initialization."""
@@ -1001,91 +1009,166 @@ class SignalGenerator:
         return clean_signal + noise
 
     def _generate_noise_arrays(
-        self, sim_config: SimConfig, n_samples: int, trial_num: int = 0
+        self,
+        sim_config: SimConfig, 
+        n_samples: int, 
+        trial_num: int = 0,
+        force_start_at_zero: bool = False
     ) -> Dict[str, Union[float, np.ndarray]]:
-        """Generates time-series noise arrays for all physical sources.
+        """Generates physically-scaled noise arrays for a simulation.
 
-        This function creates noise based on the ASD and `alpha` parameters
-        defined in the simulation configuration. It uses the high-performance,
-        Numba-accelerated `alpha_noise` generator from the `noise` module.
+        This function serves as a high-level factory for creating noise time-series
+        based on physical specifications (Amplitude Spectral Density and alpha
+        exponent). It correctly handles the distinct cases of white and colored
+        noise, using the appropriate generator from the `noise` module and applying
+        the correct scaling factor to match the target ASD.
+
+        Methodology:
+        - White Noise (alpha = 0): The time series is generated from a Gaussian
+        distribution whose standard deviation (RMS) is calculated to match the
+        total power implied by the constant ASD over the simulation bandwidth
+        (up to the Nyquist frequency).
+        RMS = ASD * sqrt(f_sample / 2).
+
+        - Colored Noise (0 < alpha <= 2): The `alpha_noise` generator is used,
+        which produces a basis signal whose two-sided PSD is 1.0 at 1 Hz.
+        To scale this to the target one-sided ASD, a scaling factor is derived:
+            - One-sided PSD = 2 * Two-sided PSD (for f>0).
+            - The basis signal has a one-sided PSD of 2.0 at 1 Hz.
+            - The basis signal has a one-sided ASD of sqrt(2.0) at 1 Hz.
+            - The required scaling factor is therefore: `target_ASD / sqrt(2.0)`.
 
         Parameters
         ----------
         sim_config : SimConfig
-            Configuration object containing all noise parameters.
+            Configuration object containing all noise parameters for the
+            simulation, including sampling frequency and noise specs for each
+            source.
         n_samples : int
-            Number of data samples to generate.
+            The number of data samples to generate for each noise array.
         trial_num : int, optional
-            A seed for the random number generators.
+            A seed offset for the random number generators, ensuring that each
+            trial in a Monte Carlo simulation is unique but reproducible.
+            Defaults to 0.
+        force_start_at_zero : bool, optional
+            If True, subtracts the first sample from the entire generated series.
+            This acts as a crude high-pass filter and alters the low-frequency
+            spectral properties. It should be used with caution. Defaults to False.
 
         Returns
         -------
         dict[str, Union[float, np.ndarray]]
             A dictionary where keys are noise source names (e.g.,
-            'laser_frequency') and values are the corresponding noise time-
-            series arrays (or 0.0 if the ASD is zero).
+            'laser_frequency') and values are the corresponding physically-scaled
+            noise time-series arrays. If a source's ASD is zero, the value is 0.0.
+
+        Raises
+        ------
+        ValueError
+            If an ASD is negative or an alpha value is outside the supported
+            range [0, 2].
         """
         num_samples = int(n_samples)
-        assert num_samples > 0, (
-            f"num_samples should be greater than zero, got {num_samples}"
-        )
+        if num_samples <= 0:
+            raise ValueError(f"n_samples must be > 0, got {num_samples}")
+
         fs = sim_config.f_samp
-        noise_params = {
+        
+        # Frequency range is needed for generator initialization
+        f_min_res = fs / num_samples  # Lowest possible frequency (resolution)
+        f_max_nyq = fs / 2.0          # Nyquist frequency
+
+        noise_sources = {
             "laser_frequency": {
-                "asd": sim_config.laser.f_n,
-                "alpha": sim_config.laser.f_n_alpha,
+                "asd": sim_config.laser.f_n, "alpha": sim_config.laser.f_n_alpha
             },
-            "amplitude": {
-                "asd": sim_config.laser.amp_n,
-                "alpha": sim_config.laser.amp_n_alpha,
+            "laser_amplitude": {
+                "asd": sim_config.laser.amp_n, "alpha": sim_config.laser.amp_n_alpha
             },
-            "df": {"asd": sim_config.laser.df_n, "alpha": sim_config.laser.df_n_alpha},
+            "df": {
+                "asd": sim_config.laser.df_n, "alpha": sim_config.laser.df_n_alpha
+            },
             "armlength": {
-                "asd": sim_config.ifo.arml_n,
-                "alpha": sim_config.ifo.arml_n_alpha,
+                "asd": sim_config.ifo.arml_n, "alpha": sim_config.ifo.arml_n_alpha
+            },
+            "electronic": {
+                "asd": sim_config.ifo.s_n, "alpha": sim_config.ifo.s_n_alpha
             },
         }
-        basis_noises = {}
-        final_noise = {}
 
-        # Use a single seed counter to ensure all generators are unique per trial
-        seed_counter = 1 + trial_num * len(noise_params)
+        # Cache for basis noise generators to avoid re-initializing for the same alpha
+        basis_noise_generators: Dict[float, alpha_noise] = {}
+        final_noises: Dict[str, Union[float, np.ndarray]] = {}
+        
+        # Use a single seed counter to ensure all RNGs are unique but deterministic
+        # per trial. The large multiplier prevents overlap between trials.
+        seed_counter = 1 + trial_num * (len(noise_sources) + 1)
 
-        # Create a single RandomState generator for all numpy-based noise
-        rng = np.random.RandomState(seed=seed_counter)
-        seed_counter += 1
+        for name, params in noise_sources.items():
+            asd_at_1hz = params.get("asd", 0.0)
+            alpha = params.get("alpha", 0.0)
 
-        for name, params in noise_params.items():
-            asd = params["asd"]
-            if asd == 0.0:
-                final_noise[name] = 0.0
+            if asd_at_1hz < 0:
+                raise ValueError(f"ASD for '{name}' cannot be negative, got {asd_at_1hz}")
+
+            if asd_at_1hz == 0.0:
+                final_noises[name] = 0.0
                 continue
 
-            if name in ["amplitude", "df"]:
-                # Calculate required standard deviation for the time series
-                # sigma = ASD * sqrt(sampling_rate / 2)
-                sigma = asd * np.sqrt(fs / 2.0)
-                final_noise[name] = rng.normal(scale=sigma, size=num_samples)
-                # Skip to the next noise source
-                continue
-
-            alpha_val = params["alpha"]
-            # Generate basis noise if not already created for this color
-            if alpha_val not in basis_noises and params["asd"] != 0:
-                generator = alpha_noise(
-                    fs, fs / num_samples, fs / 2, alpha=alpha_val, seed=seed_counter
-                )
-                basis_noises[alpha_val] = generator.get_series(num_samples)
+            if alpha == 0.0:
+                # --- Case 1: White Noise (alpha = 0) ---
+                # Total variance for a real signal with a constant one-sided PSD
+                # of ASD^2 is Var = integral(ASD^2, 0, fs/2) = ASD^2 * (fs/2).
+                # The standard deviation (RMS) is therefore ASD * sqrt(fs/2).
+                sigma = asd_at_1hz * np.sqrt(f_max_nyq)
+                
+                # We use np.random directly for efficiency.
+                rng = np.random.default_rng(seed_counter)
                 seed_counter += 1
+                noise_series = rng.normal(scale=sigma, size=num_samples)
 
-            # Scale the basis noise by the specified ASD
-            if alpha_val in basis_noises:
-                final_noise[name] = asd / np.sqrt(2) * basis_noises[alpha_val]
-                final_noise[name] = final_noise[name] - final_noise[name][0]
+            elif 0.01 <= alpha <= 2.0:
+                # --- Case 2: Colored Noise (0.01 <= alpha <= 2) ---
+                
+                # 2a. Get a basis noise generator (from cache or create a new one).
+                if alpha not in basis_noise_generators:
+                    # The alpha_noise class whitens below f_min, so we use the
+                    # simulation's frequency resolution as the lower bound to
+                    # capture all relevant dynamics.
+                    basis_noise_generators[alpha] = alpha_noise(
+                        f_sample=fs,
+                        f_min=f_min_res,
+                        f_max=f_max_nyq,
+                        alpha=alpha,
+                        init_filter=True, # Settle filter for realistic noise
+                        seed=seed_counter,
+                    )
+                    seed_counter += 1
+                
+                generator = basis_noise_generators[alpha]
+                
+                # 2b. Generate the basis noise series.
+                # This series has a two-sided PSD of 1.0 at 1 Hz.
+                basis_series = generator.get_series(num_samples)
+                
+                # 2c. Calculate the correct scaling factor and apply it.
+                # The one-sided ASD of the basis series at 1 Hz is sqrt(2.0).
+                # We scale it to match our target ASD.
+                scaling_factor = asd_at_1hz / np.sqrt(2.0)
+                noise_series = basis_series * scaling_factor
+                
             else:
-                final_noise[name] = 0.0
+                raise ValueError(
+                    f"Alpha for '{name}' is invalid. Must be in [0, 2], got {alpha}."
+                )
 
-        return final_noise
+            # Optional high-pass filtering for special cases.
+            if force_start_at_zero:
+                noise_series = noise_series - noise_series[0]
+
+            final_noises[name] = noise_series
+
+        return final_noises
 
     def _run_physics_simulation(
         self,
@@ -1293,10 +1376,11 @@ class SignalGenerator:
             + phase_noise_from_laser  # Phase noise from laser frequency jitter
         )
 
-        amplitude_effective = laser.amp + noise_arrays.get("amplitude", 0.0)
+        amplitude_effective = laser.amp + noise_arrays.get("laser_amplitude", 0.0)
+
         voltage_signal = amplitude_effective * (
             1 + ifo.visibility * np.cos(dfmi_phase)
-        )
+        ) + noise_arrays.get("electronic", 0.0)
 
         if is_dynamic:
             simulated_phase_ground_truth = ifo.phi + dynamic_carrier_phase_signal

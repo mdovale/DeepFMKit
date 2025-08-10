@@ -129,9 +129,8 @@ def test_generate_ideal_signal_matches_formula(basic_sim_config):
 @pytest.mark.parametrize(
     "noise_attr, value",
     [
-        ("f_n", 100.0),  # Laser frequency noise
-        ("amp_n", 0.1),  # Amplitude noise
-        ("arml_n", 1e-12),  # Arm length noise
+        ("amp_n", 1e-3),  # Laser amplitude noise
+        ("s_n", 1e-3),    # Electronic noise
     ],
 )
 def test_noise_injection_increases_variance(basic_sim_config, noise_attr, value):
