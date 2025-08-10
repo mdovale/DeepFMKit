@@ -108,9 +108,9 @@ def test_ssqf_zero_at_ground_truth(synthetic_iq_data):
     assert ssq == pytest.approx(0.0, abs=1e-12)
 
 
-def test_coeffs_zero_gradient_at_ground_truth(synthetic_iq_data):
+def test_zero_gradient_at_ground_truth(synthetic_iq_data):
     """
-    Tests that the `coeffs` function returns a gradient vector with all
+    Tests that the `ssq_jac_grad` function returns a gradient vector with all
     elements very close to zero when evaluated at the ground truth, which
     is a necessary condition for a minimum of the SSQ.
     """
@@ -118,7 +118,7 @@ def test_coeffs_zero_gradient_at_ground_truth(synthetic_iq_data):
     iq_data = synthetic_iq_data["iq_data"]
     ndata = synthetic_iq_data["ndata"]
 
-    ssq, jtj_flat, gradient = fit.coeffs(ndata, iq_data, params)
+    ssq, _, gradient = fit.ssq_jac_grad(ndata, iq_data, params)
 
     # At the minimum of the SSQ, the gradient should be zero.
     assert ssq == pytest.approx(0.0, abs=1e-12)
