@@ -56,12 +56,81 @@ from multiprocessing import Pool
 from scipy.optimize import minimize_scalar
 from abc import ABC, abstractmethod
 import numpy as np
+from numba import jit
 import pandas as pd
 from tqdm import tqdm
 from scipy import constants as sc
 import logging
 from typing import Any, Dict, List, Tuple
 
+@jit(nopython=True)
+def _ekf_core_loop(data, t_axis, w_m, R_downsample, nbuf,
+                   x_init, P_init, Q, R_val):
+    """
+    Core JIT-compiled loop for the Extended Kalman Filter.
+    
+    This function contains the performance-critical, sample-by-sample update
+    loop. Decorating it with Numba's JIT compiler translates it into fast
+    machine code, dramatically increasing performance.
+    
+    Parameters are all simple NumPy arrays or scalars for Numba compatibility.
+    
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        A tuple containing:
+        - The final state vector `x`.
+        - The results array populated at the downsampled rate.
+    """
+    # --- Initialization ---
+    dim_x = 5
+    x = x_init.copy()
+    P = P_init.copy()
+    F = np.eye(dim_x)
+    R = np.array([[R_val]])
+    
+    results = np.zeros((nbuf, dim_x))
+    n_samp = len(data)
+
+    # --- Main Loop ---
+    for k in range(n_samp):
+        # PREDICT STEP
+        # P = F @ P @ F.T + Q (F is identity)
+        P = P + Q
+
+        # UPDATE STEP
+        a, m, phi, psi, dc = x
+        theta = w_m * t_axis[k] + psi
+        full_phase_arg = phi + m * np.cos(theta)
+
+        h_x = a * np.cos(full_phase_arg) + dc
+
+        # Jacobian H
+        sin_full_arg = np.sin(full_phase_arg)
+        H = np.array([[
+            np.cos(full_phase_arg),
+            -a * sin_full_arg * np.cos(theta),
+            -a * sin_full_arg,
+            a * m * sin_full_arg * np.sin(theta),
+            1.0
+        ]])
+
+        # Innovation and Kalman Gain
+        y_k = data[k] - h_x
+        S = H @ P @ H.T + R
+        K = (P @ H.T) @ np.linalg.inv(S)
+
+        # Update state and covariance
+        x = x + (K * y_k).flatten() # Simplified for scalar measurement
+        P = (np.eye(dim_x) - K @ H) @ P
+
+        # Store result at the downsampled rate
+        if (k + 1) % R_downsample == 0:
+            buf_idx = (k + 1) // R_downsample - 1
+            if buf_idx >= 0 and buf_idx < nbuf:
+                results[buf_idx, :] = x
+                
+    return x, results
 
 def _process_fit_chunk(args: tuple) -> List[Dict[str, Any]]:
     """Worker function for parallel NLS fitting.
@@ -215,17 +284,23 @@ class BaseFitter(ABC):
         """
         pass
 
-
 class EKFFitter(BaseFitter):
     """A fitter that performs state estimation using an Extended Kalman Filter.
 
     This fitter operates in the time domain, updating its state estimate with
     every incoming data sample. It uses a random walk process model, a common
     and robust choice when the exact parameter dynamics are unknown.
+
+    The performance-critical `for` loop is Just-In-Time (JIT) compiled using
+    Numba, enabling very high throughput suitable for real-time processing.
     """
 
     def fit(self, main_raw: RawData, **kwargs: Any) -> pd.DataFrame:
-        """Processes raw data sequentially using an EKF.
+        """Processes raw data sequentially using a high-performance EKF.
+
+        This method sets up the initial state and covariance matrices and then
+        dispatches the main computational work to a JIT-compiled core function,
+        `_ekf_core_loop`, for maximum speed.
 
         Parameters
         ----------
@@ -246,87 +321,50 @@ class EKFFitter(BaseFitter):
         """
         # --- 0. Unpack Configuration and Data ---
         data = main_raw.data["ch0"].to_numpy()
+        verbose = kwargs.get("verbose", True)
 
-        # I'll unpack initial conditions from kwargs, with sensible defaults.
         init_a = kwargs.get("init_a", 1.6)
         init_m = kwargs.get("init_m", 6.0)
         init_phi = kwargs.get("init_phi", 0.0)
         init_psi = kwargs.get("init_psi", 0.0)
         P0_diag = kwargs.get("P0_diag", [1.0] * 5)
         Q_diag = kwargs.get("Q_diag", [1e-8, 1e-8, 1e-6, 1e-6, 1e-8])
-        R_val = kwargs.get("R_val", None)
-        verbose = kwargs.get("verbose", True)
+        R_val = kwargs.get("R_val", np.var(data))
 
-        # --- 1. EKF Initialization ---
-        # State vector: x = [amplitude, mod_depth, phase, mod_phase, dc_offset]
+        # --- 1. Prepare Inputs for JIT-Compiled Function ---
+        # All inputs must be simple scalars or NumPy arrays.
         dim_x = 5
-        x = np.array([init_a, init_m, init_phi, init_psi, np.mean(data)])
-        P = np.diag(P0_diag)
-        Q = np.diag(Q_diag)
-        if R_val is None:
-            R_val = np.var(data)
-        R = np.array([[R_val]])
-        F = np.eye(dim_x)
-
-        # Setup for the run
+        x_init = np.array([init_a, init_m, init_phi, init_psi, np.mean(data)], dtype=np.float64)
+        P_init = np.diag(P0_diag).astype(np.float64)
+        Q = np.diag(Q_diag).astype(np.float64)
+        
         n_samp = len(data)
         w_m = 2 * np.pi * main_raw.fm
         t_axis = np.arange(n_samp) / main_raw.f_samp
 
-        # Calculate downsampling parameters to match NLS fitter output rate
-        R_downsample, fs, nbuf = _calculate_fit_params(main_raw, self.config["n"])
+        R_downsample, _, nbuf = _calculate_fit_params(main_raw, self.config["n"])
 
-        results = np.zeros((nbuf, dim_x))
-        logging.debug(f"Running EKF for {n_samp} samples...")
+        # --- 2. Call the High-Performance Core Loop ---
+        logging.info(f"Running JIT-compiled EKF for {n_samp} samples...")
+        
+        # The first run will be slower due to JIT compilation.
+        # Subsequent runs will be much faster.
+        if verbose:
+            print("Numba JIT compilation may take a moment on the first run...")
 
-        # --- 2. Main EKF Loop ---
-        loop_iter = (
-            tqdm(range(n_samp), desc="EKF Progress") if verbose else range(n_samp)
+        # The core logic is now in a separate, compiled function
+        _, results = _ekf_core_loop(
+            data, t_axis, w_m, R_downsample, nbuf,
+            x_init, P_init, Q, R_val
         )
-
-        for k in loop_iter:
-            # PREDICT STEP
-            P = F @ P @ F.T + Q
-
-            # UPDATE STEP
-            a, m, phi, psi, dc = x
-            theta = w_m * t_axis[k] + psi
-            full_phase_arg = phi + m * np.cos(theta)
-
-            h_x = a * np.cos(full_phase_arg) + dc  # Model prediction
-
-            # Jacobian of measurement model H = [dh/da, dh/dm, dh/dphi, dh/dpsi, dh/ddc]
-            sin_full_arg = np.sin(full_phase_arg)
-            H = np.array(
-                [
-                    [
-                        np.cos(full_phase_arg),
-                        -a * sin_full_arg * np.cos(theta),
-                        -a * sin_full_arg,
-                        +a * m * sin_full_arg * np.sin(theta),
-                        1.0,
-                    ]
-                ]
-            )
-
-            # Innovation (residual) and Kalman Gain
-            y_k = data[k] - h_x
-            S = H @ P @ H.T + R
-            K = (P @ H.T) @ np.linalg.inv(S)
-
-            # Update state and covariance
-            x = x + (K @ y_k.reshape(1, 1)).flatten()
-            P = (np.eye(dim_x) - K @ H) @ P
-
-            # Store result at the downsampled rate
-            if (k + 1) % R_downsample == 0:
-                buf_idx = (k + 1) // R_downsample - 1
-                if buf_idx < nbuf:
-                    results[buf_idx, :] = x
+        
+        # TODO: Progress tracking is tricky with a single JIT call.
+        # For a long run, one might chunk the data and call the JIT function
+        # multiple times to update a progress bar. For simplicity, we omit it here.
+        
+        logging.info("EKF processing finished.")
 
         # --- 3. Create and return results DataFrame ---
-        logging.debug("EKF processing finished. Packaging results...")
-
         df_dict = {
             "amp": results[:, 0],
             "m": results[:, 1],
@@ -338,7 +376,6 @@ class EKFFitter(BaseFitter):
         }
 
         return pd.DataFrame(df_dict)
-
 
 class StandardNLSFitter(BaseFitter):
     """A fitter using the standard frequency-domain Non-Linear Least Squares method.
