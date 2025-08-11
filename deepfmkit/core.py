@@ -307,6 +307,7 @@ class DeepFrame:
             return
 
         for _, raw_obj in generated_channels.items():
+            if verbose: logging.info(f"Stored RawData for channel with label {raw_obj.label}")
             self.raws[raw_obj.label] = raw_obj
 
         sim_time = time.time() - t0
@@ -692,6 +693,8 @@ class DeepFrame:
         witness_channel_label: str,
         m_witness: Optional[float] = None,
         delta_l_witness: Optional[float] = None,
+        *args: Any, 
+        **kwargs: Any, 
     ) -> None:
         """Creates a witness channel with optional auto-tuning.
 
@@ -740,20 +743,14 @@ class DeepFrame:
             m_target = (2 * np.pi * shared_laser.df * delta_l_witness) / sc.c
 
         # --- 3. Create and configure witness interferometer ---
-        witness_ifo = IfoConfig(label=f"{witness_channel_label}_ifo")
+        witness_ifo = IfoConfig(label=f"{witness_channel_label}_ifo", *args, **kwargs)
         witness_ifo.arml_mod_amp = 0.0
-        witness_ifo.arml_n = 0.0
 
         if shared_laser.df == 0:
             raise ValueError("Cannot set 'm_witness' when laser 'df' is zero.")
         final_delta_l = (m_target * sc.c) / (2 * np.pi * shared_laser.df)
-        witness_ifo.ref_arml = 0.01
+        witness_ifo.ref_arml = main_channel.ifo.ref_arml
         witness_ifo.meas_arml = witness_ifo.ref_arml + final_delta_l
-
-        f0 = sc.c / shared_laser.wavelength
-        static_fringe_phase = (2 * np.pi * f0 * final_delta_l) / sc.c
-        phi_offset_required = (np.pi / 2.0) + static_fringe_phase
-        witness_ifo.phi = phi_offset_required % (2 * np.pi)
 
         # --- 4. Compose and register the new channel ---
         witness_channel = SimConfig(

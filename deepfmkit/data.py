@@ -148,7 +148,8 @@ class RawData:
     phi_sim_downsamp: Optional[np.array] = None  # phi_sim downsampled
     f_noise: Optional[np.array] = None  # Laser frequency noise
     l_noise: Optional[np.array] = None  # Armlength modulation noise
-    a_noise: Optional[np.array] = None  # Signal amplitude noise
+    a_noise: Optional[np.array] = None  # Laser amplitude noise
+    s_noise: Optional[np.array] = None  # Electronic noise
     df_noise: Optional[np.array] = None  # Laser frequency modulation amplitude noise
 
     def info(self) -> None:

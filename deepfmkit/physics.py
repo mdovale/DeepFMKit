@@ -818,7 +818,7 @@ class SignalGenerator:
         else:
             logging.debug("Generating noise internally based on ASDs.")
             noise = self._generate_noise_arrays(
-                main_config, num_samples_total, trial_num
+                main_config, num_samples_total, witness_config, trial_num
             )
         if verbose:
             pbar.update(1)
@@ -871,8 +871,9 @@ class SignalGenerator:
 
         # Apply the safe slicing
         raw_main.f_noise = safe_slice(noise.get("laser_frequency", 0.0), valid_slice)
-        raw_main.a_noise = safe_slice(noise.get("amplitude", 0.0), valid_slice)
+        raw_main.a_noise = safe_slice(noise.get("laser_amplitude", 0.0), valid_slice)
         raw_main.l_noise = safe_slice(noise.get("armlength", 0.0), valid_slice)
+        raw_main.s_noise = safe_slice(noise.get("electronic", 0.0), valid_slice)
         raw_main.df_noise = safe_slice(noise.get("df", 0.0), valid_slice)
 
         output_channels = {"main": raw_main}
@@ -886,7 +887,8 @@ class SignalGenerator:
                 witness_config,
                 time_axis_padded,
                 noise,
-                is_dynamic=False,
+                is_dynamic=True,
+                is_witness=True,
                 timeshift_order=timeshift_order,
             )
             witness_signal_padded, witness_phase_padded, witness_gt_padded = (
@@ -907,7 +909,18 @@ class SignalGenerator:
             raw_witness.f_noise = safe_slice(
                 noise.get("laser_frequency", 0.0), valid_slice
             )
-            raw_witness.a_noise = safe_slice(noise.get("amplitude", 0.0), valid_slice)
+            raw_witness.a_noise = safe_slice(
+                noise.get("laser_amplitude", 0.0), valid_slice
+            )
+            raw_witness.df_noise = safe_slice(
+                noise.get("df", 0.0), valid_slice
+            )
+            raw_witness.s_noise = safe_slice(
+                noise.get("witness_electronic", 0.0), valid_slice
+            )
+            raw_witness.l_noise = safe_slice(
+                noise.get("witness_electronic", 0.0), valid_slice
+            )
             output_channels["witness"] = raw_witness
 
         if verbose:
@@ -1012,6 +1025,7 @@ class SignalGenerator:
         self,
         sim_config: SimConfig, 
         n_samples: int, 
+        witness_config: Optional[SimConfig] = None,
         trial_num: int = 0,
         force_start_at_zero: bool = False
     ) -> Dict[str, Union[float, np.ndarray]]:
@@ -1078,6 +1092,7 @@ class SignalGenerator:
         f_max_nyq = fs / 2.0          # Nyquist frequency
 
         noise_sources = {
+            # Laser noise sources:
             "laser_frequency": {
                 "asd": sim_config.laser.f_n, "alpha": sim_config.laser.f_n_alpha
             },
@@ -1087,6 +1102,7 @@ class SignalGenerator:
             "df": {
                 "asd": sim_config.laser.df_n, "alpha": sim_config.laser.df_n_alpha
             },
+            # Interferometer noise sources:
             "armlength": {
                 "asd": sim_config.ifo.arml_n, "alpha": sim_config.ifo.arml_n_alpha
             },
@@ -1095,6 +1111,13 @@ class SignalGenerator:
             },
         }
 
+        # Witness interferometer uncorrelated noise sources:
+        if witness_config:
+            noise_sources["witness_armlength"] = {
+                "asd": witness_config.ifo.arml_n, "alpha": witness_config.ifo.arml_n_alpha}
+            noise_sources["witness_electronic"] = {
+                "asd": witness_config.ifo.s_n, "alpha": witness_config.ifo.s_n_alpha}
+            
         # Cache for basis noise generators to avoid re-initializing for the same alpha
         basis_noise_generators: Dict[float, alpha_noise] = {}
         final_noises: Dict[str, Union[float, np.ndarray]] = {}
@@ -1175,7 +1198,8 @@ class SignalGenerator:
         time_axis: np.ndarray,
         noise_arrays: Dict[str, np.ndarray],
         is_dynamic: bool,
-        timeshift_order: int,
+        is_witness: bool = False,
+        timeshift_order: int = 31,
         oversampling_factor: int = 16,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Core physics calculation for a single channel.
@@ -1220,7 +1244,11 @@ class SignalGenerator:
         if is_dynamic:
             dynamic_path_change = ifo.arml_mod_amp * np.sin(
                 2 * np.pi * ifo.arml_mod_f * time_axis + ifo.arml_mod_psi
-            ) + noise_arrays.get("armlength", 0.0)
+            )
+            if is_witness:
+                dynamic_path_change += noise_arrays.get("witness_armlength", 0.0)
+            else:
+                dynamic_path_change += noise_arrays.get("armlength", 0.0)
         else:
             dynamic_path_change = 0.0
         dynamic_opd_change = dynamic_path_change
@@ -1379,7 +1407,11 @@ class SignalGenerator:
 
         voltage_signal = amplitude_effective * (
             1 + ifo.visibility * np.cos(dfmi_phase)
-        ) + noise_arrays.get("electronic", 0.0)
+        ) 
+        if is_witness:
+            voltage_signal += noise_arrays.get("witness_electronic", 0.0)
+        else:
+            voltage_signal += noise_arrays.get("electronic", 0.0)
 
         if is_dynamic:
             simulated_phase_ground_truth = ifo.phi + dynamic_carrier_phase_signal
