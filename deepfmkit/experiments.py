@@ -72,6 +72,7 @@ from typing import Optional, Callable, Dict, Any, List, Union, Set, Tuple
 import pickle
 import logging
 
+logger = logging.getLogger(__name__)
 
 def _run_single_trial(job_packet: Tuple) -> Dict[str, Any]:
     """Worker function for parallel processing that executes one full trial.

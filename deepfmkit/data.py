@@ -46,11 +46,7 @@ import matplotlib.axes
 
 import logging
 
-logging.basicConfig(
-    format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging.INFO,
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+logger = logging.getLogger(__name__)
 
 def open_txt_maybe_gzip(path: str | Path, *, encoding: str = "utf-8") -> TextIO:
     """Open a text file for reading, optionally gzipped.

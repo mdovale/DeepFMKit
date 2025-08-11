@@ -59,9 +59,12 @@ import numpy as np
 from numba import jit
 import pandas as pd
 from tqdm import tqdm
-from scipy import constants as sc
-import logging
 from typing import Any, Dict, List, Tuple
+
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 @jit(nopython=True)
 def _ekf_core_loop(data, t_axis, w_m, R_downsample, nbuf,
