@@ -604,7 +604,7 @@ class DeepFrame:
             A fit object containing the results, which is also stored in
             `self.fits`. Returns None on failure.
         """
-        # --- 1. Select the Fitter Class ---
+        # --- 1. Select the Fitter class ---
         fitter_map = {
             "nls": StandardNLSFitter,
             "ekf": EKFFitter,
@@ -619,7 +619,7 @@ class DeepFrame:
             f"Dispatching to {FitterClass.__name__} for label '{main_label}'."
         )
 
-        # --- 2. Prepare Data and Config ---
+        # --- Prepare data and config ---
         if main_label not in self.raws:
             raise KeyError(
                 f"Invalid raw data label: '{main_label}' not found in self.raws."
@@ -634,16 +634,22 @@ class DeepFrame:
         if n_cycles is None:
             sim_obj = self.sims.get(main_raw.sim.label if main_raw.sim else main_label)
             n_cycles = sim_obj.fit_n if sim_obj else 20
+        kwargs.pop("n", None)
 
         # The base config for all fitters
         fit_config = {"n": n_cycles}
 
-        # EKFFitter logic
+        # --- Route method-specific kwargs to fit_config ---
         if method == "ekf":
-            ekf_config_keys = ["P0_diag", "Q_diag", "R_val"]
-            for key in ekf_config_keys:
-                if key in kwargs:
-                    fit_config[key] = kwargs.pop(key)
+            config_keys = ["P0_diag", "Q_diag", "R_val"]
+        elif method == "nls":
+            config_keys = ["ndata", "fit_params", "init_psi_method"]
+        else:
+            config_keys = []
+        
+        for key in config_keys:
+            if key in kwargs:
+                fit_config[key] = kwargs.pop(key)
 
         R, fs, nbuf = self._fit_init(main_label, n_cycles)
         if (
@@ -653,13 +659,13 @@ class DeepFrame:
         ):
             main_raw.phi_sim_downsamp = vectorized_downsample(main_raw.phi_sim, R)
 
-        # --- 3. Instantiate and Run the Fitter ---
+        # --- Instantiate and run the Fitter ---
         fitter_args = {"main_raw": main_raw}
 
         fitter = FitterClass(fit_config)
         results_df = fitter.fit(**fitter_args, **kwargs)
 
-        # --- 4. Create and Store the Final FitData ---
+        # --- Create and store the FitData ---
         if results_df is None or results_df.empty:
             logging.warning(
                 f"{FitterClass.__name__} returned no results for '{main_label}'."

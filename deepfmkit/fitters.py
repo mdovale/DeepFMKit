@@ -403,6 +403,24 @@ class StandardNLSFitter(BaseFitter):
     convergence and supports "constrained" fits where a subset of parameters
     can be held constant.
     """
+    def __init__(self, fit_config: Dict[str, Any]):
+        """Initializes the NLS fitter with its configuration.
+
+        Parameters
+        ----------
+        fit_config : dict
+            A dictionary of fitting parameters, including:
+            - n (int): The number of modulation cycles per output buffer.
+            - ndata (int, optional): Number of harmonics to fit. Defaults to 10.
+            - fit_params (list[str], optional): List of parameters to fit.
+              Defaults to all four: ['amp', 'm', 'phi', 'psi'].
+            - init_psi_method (str, optional): Method for smart initialization
+              of psi ('scan' or 'minimize'). If None, a standard guess is used.
+        """
+        super().__init__(fit_config)
+        self.ndata = self.config.get("ndata", 10)
+        self.fit_params = self.config.get("fit_params", ALL_PARAMS)
+        self.init_psi_method = self.config.get("init_psi_method", None)
 
     def fit(self, main_raw: RawData, **kwargs: Any) -> pd.DataFrame:
         """Performs the NLS fit on raw data.
@@ -431,10 +449,6 @@ class StandardNLSFitter(BaseFitter):
         """
         # --- 0. Unpack Configuration ---
         n = self.config["n"]
-        ndata = kwargs.get("ndata", self.config.get("ndata", 10))
-        if "ndata" in kwargs:
-            ndata = kwargs["ndata"]
-            kwargs.pop("ndata")
 
         # Determine which parameters to fit. Defaults to all four standard parameters.
         fit_params = kwargs.get("fit_params", ALL_PARAMS)
@@ -445,9 +459,6 @@ class StandardNLSFitter(BaseFitter):
         init_m = kwargs.get("init_m", DEFAULT_GUESS["m"])
         init_phi = kwargs.get("init_phi", DEFAULT_GUESS["phi"])
 
-        # Get the method for smart initialization. If None, it will be skipped.
-        init_psi_method = kwargs.get("init_psi_method", None)
-
         # Calculate buffer parameters based on the raw data object.
         R, _, nbuf = _calculate_fit_params(main_raw, n)
         if nbuf == 0:
@@ -457,11 +468,11 @@ class StandardNLSFitter(BaseFitter):
         # --- 1. Smart Initialization for `psi` ---
         # If a method is specified, run the initialization routine.
         # This is a crucial step to avoid local minima.
-        if init_psi_method and "psi" in fit_params:
+        if self.init_psi_method and "psi" in fit_params:
             # The _psi_init routine requires a full 4-parameter fit to properly
             # evaluate the SSQ landscape for psi.
             init_psi = self._psi_init(
-                main_raw, init_psi_method, init_a, init_m, R, ndata
+                main_raw, self.init_psi_method, init_a, init_m, R, self.ndata
             )
         else:
             # If smart initialization is disabled or if psi is not a fit parameter,
@@ -479,17 +490,17 @@ class StandardNLSFitter(BaseFitter):
 
         # From the full dictionary, create the vector of only the parameters
         # that will be actively fitted. This vector is passed to the LMA.
-        initial_guess_active = [full_initial_guess[p_name] for p_name in fit_params]
+        initial_guess_active = [full_initial_guess[p_name] for p_name in self.fit_params]
 
         # --- 3. Dispatch to Executor ---
         # Based on the 'parallel' flag, run the fit sequentially or in parallel.
         if parallel:
             return self._fit_parallel(
-                main_raw, R, nbuf, ndata, initial_guess_active, fit_params, **kwargs
+                main_raw, R, nbuf, self.ndata, initial_guess_active, self.fit_params, **kwargs
             )
         else:
             return self._fit_sequential(
-                main_raw, R, nbuf, ndata, initial_guess_active, fit_params
+                main_raw, R, nbuf, self.ndata, initial_guess_active, self.fit_params
             )
 
     def _fit_sequential(
