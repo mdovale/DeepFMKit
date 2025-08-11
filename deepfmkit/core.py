@@ -638,6 +638,13 @@ class DeepFrame:
         # The base config for all fitters
         fit_config = {"n": n_cycles}
 
+        # EKFFitter logic
+        if method == "ekf":
+            ekf_config_keys = ["P0_diag", "Q_diag", "R_val"]
+            for key in ekf_config_keys:
+                if key in kwargs:
+                    fit_config[key] = kwargs.pop(key)
+
         R, fs, nbuf = self._fit_init(main_label, n_cycles)
         if (
             hasattr(main_raw, "phi_sim")

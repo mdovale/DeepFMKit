@@ -297,6 +297,26 @@ class EKFFitter(BaseFitter):
     The performance-critical `for` loop is Just-In-Time (JIT) compiled using
     Numba, enabling very high throughput suitable for real-time processing.
     """
+    def __init__(self, fit_config: Dict[str, Any]):
+        """Initializes the EKF fitter with its tuning parameters.
+
+        Parameters
+        ----------
+        fit_config : dict
+            A dictionary of fitting parameters, including:
+            - n (int): The number of modulation cycles per output buffer.
+            - P0_diag (list[float], optional): Diagonal of the initial state
+              covariance `P`. Defaults to `[1.0] * 5`.
+            - Q_diag (list[float], optional): Diagonal of the process noise
+              covariance `Q`. Defaults to `[1e-8, 1e-8, 1e-6, 1e-6, 1e-8]`.
+            - R_val (float, optional): Measurement noise variance `R`. If None,
+              it is estimated from the variance of the input data at runtime.
+              Defaults to None.
+        """
+        super().__init__(fit_config)
+        self.P0_diag = self.config.get("P0_diag", [1.0] * 5)
+        self.Q_diag = self.config.get("Q_diag", [1e-8, 1e-8, 1e-6, 1e-6, 1e-8])
+        self.R_val = self.config.get("R_val", None) # Default to None for dynamic estimation
 
     def fit(self, main_raw: RawData, **kwargs: Any) -> pd.DataFrame:
         """Processes raw data sequentially using a high-performance EKF.
@@ -310,11 +330,8 @@ class EKFFitter(BaseFitter):
         main_raw : RawData
             The raw data object for the primary channel.
         **kwargs : Any
-            Keyword arguments for EKF initialization and tuning:
+            Keyword arguments for EKF state initialization:
             - init_a, init_m, init_phi, init_psi (float): Initial state guesses.
-            - P0_diag (list[float]): Diagonal of the initial state covariance `P`.
-            - Q_diag (list[float]): Diagonal of the process noise covariance `Q`.
-            - R_val (float): Measurement noise variance `R`.
             - verbose (bool): If True, shows a progress bar.
 
         Returns
@@ -326,20 +343,25 @@ class EKFFitter(BaseFitter):
         data = main_raw.data["ch0"].to_numpy()
         verbose = kwargs.get("verbose", True)
 
-        init_a = kwargs.get("init_a", 1.6)
-        init_m = kwargs.get("init_m", 6.0)
-        init_phi = kwargs.get("init_phi", 0.0)
-        init_psi = kwargs.get("init_psi", 0.0)
-        P0_diag = kwargs.get("P0_diag", [1.0] * 5)
-        Q_diag = kwargs.get("Q_diag", [1e-8, 1e-8, 1e-6, 1e-6, 1e-8])
-        R_val = kwargs.get("R_val", np.var(data))
-
+        init_a = kwargs.get("init_a", DEFAULT_GUESS["amp"])
+        init_m = kwargs.get("init_m", DEFAULT_GUESS["m"])
+        init_phi = kwargs.get("init_phi", DEFAULT_GUESS["phi"])
+        init_psi = kwargs.get("init_psi", DEFAULT_GUESS["psi"])
+        
         # --- 1. Prepare Inputs for JIT-Compiled Function ---
         # All inputs must be simple scalars or NumPy arrays.
-        dim_x = 5
         x_init = np.array([init_a, init_m, init_phi, init_psi, np.mean(data)], dtype=np.float64)
-        P_init = np.diag(P0_diag).astype(np.float64)
-        Q = np.diag(Q_diag).astype(np.float64)
+        
+        # Use stored configuration for tuning parameters
+        P_init = np.diag(self.P0_diag).astype(np.float64)
+        Q = np.diag(self.Q_diag).astype(np.float64)
+
+        # Handle the dynamic R_val case
+        if self.R_val is None:
+            R_val_actual = np.var(data)
+            logging.debug(f"EKF R_val not specified, estimated from data variance: {R_val_actual:.4g}")
+        else:
+            R_val_actual = self.R_val
         
         n_samp = len(data)
         w_m = 2 * np.pi * main_raw.fm
@@ -350,20 +372,13 @@ class EKFFitter(BaseFitter):
         # --- 2. Call the High-Performance Core Loop ---
         logging.info(f"Running JIT-compiled EKF for {n_samp} samples...")
         
-        # The first run will be slower due to JIT compilation.
-        # Subsequent runs will be much faster.
         if verbose:
             print("Numba JIT compilation may take a moment on the first run...")
 
-        # The core logic is now in a separate, compiled function
         _, results = _ekf_core_loop(
             data, t_axis, w_m, R_downsample, nbuf,
-            x_init, P_init, Q, R_val
+            x_init, P_init, Q, R_val_actual
         )
-        
-        # TODO: Progress tracking is tricky with a single JIT call.
-        # For a long run, one might chunk the data and call the JIT function
-        # multiple times to update a progress bar. For simplicity, we omit it here.
         
         logging.info("EKF processing finished.")
 
@@ -379,7 +394,7 @@ class EKFFitter(BaseFitter):
         }
 
         return pd.DataFrame(df_dict)
-
+    
 class StandardNLSFitter(BaseFitter):
     """A fitter using the standard frequency-domain Non-Linear Least Squares method.
 
