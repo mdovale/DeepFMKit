@@ -52,6 +52,17 @@ from typing import Callable, Optional, Dict, Any, Tuple, Union
 from dataclasses import dataclass, field
 import matplotlib.axes
 
+# --- Helpers ---
+def is_valid_alpha(alpha: float) -> bool:
+    """Return True iff alpha is finite and either 0.0 or in [0.01, 2.0]."""
+    return math.isfinite(alpha) and (alpha == 0.0 or 0.01 <= alpha <= 2.0)
+
+def validate_alpha(alpha: float, name: str) -> None:
+    """Validate a single alpha; raise with a consistent message."""
+    if not is_valid_alpha(alpha):
+        raise ValueError(
+            f"{name} must be finite and either 0.0 or in the closed interval [0.01, 2.0]."
+        )
 
 @dataclass
 class IfoConfig:
@@ -137,10 +148,11 @@ class IfoConfig:
         # --- Noise Properties ---
         if self.arml_n < 0.0 or not math.isfinite(self.arml_n):
             raise ValueError("arml_n must be finite and non-negative (m/sqrt(Hz)).")
-        if not (math.isfinite(self.arml_n_alpha) and 0.0 <= self.arml_n_alpha <= 2.0):
-            raise ValueError(
-                "arml_n_alpha must be finite and in [0, 2], since PSD ∝ 1/f^alpha."
-            )
+        validate_alpha(self.arml_n_alpha, "arml_n_alpha")
+
+        if self.s_n < 0.0 or not math.isfinite(self.s_n):
+            raise ValueError("s_n must be finite and non-negative (m/sqrt(Hz)).")
+        validate_alpha(self.s_n_alpha, "s_n_alpha")
 
 
 @dataclass
@@ -216,32 +228,28 @@ class LaserConfig:
         """Validates the configuration after initialization."""
         if self.wavelength <= 0:
             raise ValueError("wavelength must be > 0 (meters).")
-        if self.fm < 0:
-            raise ValueError("modulation frequency fm cannot be negative.")
-        if self.df < 0:
-            raise ValueError("modulation amplitude df cannot be negative.")
+        if self.fm <= 0:
+            raise ValueError("modulation frequency must be >0 (Hz).")
+        if self.df <= 0:
+            raise ValueError("modulation amplitude must be >0 (Hz).")
         if not callable(self.waveform_func):
             raise TypeError("waveform_func must be callable.")
+
         # noise ASDs (must be finite and ≥ 0)
-        for name, val in (
-            ("f_n", self.f_n),
-            ("df_n", self.df_n),
-            ("amp_n", self.amp_n),
-        ):
+        for name, val in (("f_n", self.f_n), ("df_n", self.df_n), ("amp_n", self.amp_n)):
             if not (math.isfinite(val) and val >= 0.0):
                 raise ValueError(f"{name} must be a finite, non-negative ASD.")
-        # noise colors α in [0, 2]
+
+        # noise colors: each alpha must be finite and either 0.0 or in [0.01, 2.0]
         alphas = {
             "f_n_alpha": self.f_n_alpha,
             "df_n_alpha": self.df_n_alpha,
             "amp_n_alpha": self.amp_n_alpha,
         }
-        bad = [
-            k for k, v in alphas.items() if not (math.isfinite(v) and 0.0 <= v <= 2.0)
-        ]
+        bad = [k for k, v in alphas.items() if not is_valid_alpha(v)]
         if bad:
             raise ValueError(
-                "Noise PSD is proportional to 1/f^alpha; each alpha must be in [0, 2]. "
+                "Noise PSD is proportional to 1/f^alpha; each alpha must be finite and either 0.0 or in the closed interval [0.01, 2.0]. "
                 f"Out of range: {', '.join(bad)}."
             )
 
