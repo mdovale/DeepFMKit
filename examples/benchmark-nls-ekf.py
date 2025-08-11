@@ -1,0 +1,158 @@
+# benchmark_fitters.py
+
+import time
+import os
+import subprocess
+import numpy as np
+from deepfmkit.core import DeepFrame
+from deepfmkit.physics import LaserConfig, IfoConfig, SimConfig
+
+def get_cpu_name():
+    """Gets the specific CPU brand string for the current machine."""
+    try:
+        if os.uname().sysname == "Darwin":
+            return subprocess.check_output(
+                ["sysctl", "-n", "machdep.cpu.brand_string"]
+            ).strip().decode()
+    except Exception:
+        return "Unknown CPU"
+    return "Unknown CPU"
+
+def setup_benchmark_data(n_seconds, f_samp, fm, label="benchmark_data"):
+    """
+    Creates a DFF instance and simulates data needed for a benchmark.
+    """
+    print(f"--- Setting up data for '{label}' ---")
+    print(f"Simulating {n_seconds}s of data at {f_samp/1e3:.0f} kS/s...")
+    
+    dff = DeepFrame()
+    
+    ifo = IfoConfig(ref_arml=0.1, meas_arml=0.3)
+    laser = LaserConfig(fm=fm)
+    laser.set_df_for_m(ifo, m=6.0)
+    
+    sim_config = SimConfig(
+        label=label,
+        laser_config=laser,
+        ifo_config=ifo,
+        f_samp=f_samp
+    )
+    dff.add_sim(sim_config)
+    dff.simulate(label=label, n_seconds=n_seconds, mode='snr', snr_db=100)
+    
+    print("Setup complete.\n")
+    return dff, label
+
+def run_timing(fit_function, repetitions=5):
+    """
+    Runs a function multiple times and returns the minimum execution time.
+    A warm-up run is performed first.
+    """
+    print(f"Performing warm-up run...")
+    _ = fit_function()
+    
+    times = []
+    print(f"Running benchmark {repetitions} times...")
+    for i in range(repetitions):
+        start_time = time.perf_counter()
+        fit_function()
+        end_time = time.perf_counter()
+        times.append(end_time - start_time)
+        print(f"  Run {i+1}/{repetitions}: {times[-1]:.4f} s")
+        
+    return min(times)
+
+if __name__ == "__main__":
+    cpu_name = get_cpu_name()
+    print(f"Starting benchmarks on processor: {cpu_name}")
+    print("=" * 60)
+
+    # --- Common Parameters ---
+    F_SAMP = 200e3
+    FM = 1e3
+
+    # --- NLS Fitter Benchmark ---
+    print("\n           NLS FITTER BENCHMARK")
+    print("-" * 60)
+    NLS_N_SECONDS = 100.0
+    N_CYCLES_PER_BUFFER = 20
+    N_HARMONICS = 30
+    NLS_REPETITIONS = 5
+
+    n_samples_nls = int(NLS_N_SECONDS * F_SAMP)
+    samples_per_buffer = int(F_SAMP / FM * N_CYCLES_PER_BUFFER)
+    n_fits = n_samples_nls // samples_per_buffer
+    
+    print(f"Configuration:")
+    print(f"  - Data Duration: {NLS_N_SECONDS}s ({n_samples_nls} samples)")
+    print(f"  - Total Number of Fits: {n_fits}")
+    print(f"  - Cycles per Fit (n): {N_CYCLES_PER_BUFFER}")
+    print(f"  - Harmonics per Fit (ndata): {N_HARMONICS}")
+    
+    dff_nls, data_label_nls = setup_benchmark_data(
+        n_seconds=NLS_N_SECONDS, f_samp=F_SAMP, fm=FM, label="nls_data"
+    )
+    
+    # 1. NLS Sequential Timing
+    print("\nRunning NLS SEQUENTIAL benchmark...")
+    seq_fit_func = lambda: dff_nls.fit(
+        main_label=data_label_nls, method='nls', n=N_CYCLES_PER_BUFFER,
+        ndata=N_HARMONICS, parallel=False
+    )
+    seq_time = run_timing(seq_fit_func, repetitions=NLS_REPETITIONS)
+    nls_seq_throughput_ksps = (n_samples_nls / seq_time) / 1000.0 # ADDED
+    print(f"-> Best sequential time: {seq_time:.4f} seconds")
+    print(f"-> NLS Sequential Throughput: {nls_seq_throughput_ksps:.1f} kS/s\n") # ADDED
+
+    # 2. NLS Parallel Timing
+    n_cores = os.cpu_count()
+    print(f"Running NLS PARALLEL benchmark on {n_cores} cores...")
+    par_fit_func = lambda: dff_nls.fit(
+        main_label=data_label_nls, method='nls', n=N_CYCLES_PER_BUFFER,
+        ndata=N_HARMONICS, parallel=True, n_cores=n_cores
+    )
+    par_time = run_timing(par_fit_func, repetitions=NLS_REPETITIONS)
+    nls_par_throughput_ksps = (n_samples_nls / par_time) / 1000.0 # ADDED
+    print(f"-> Best parallel time: {par_time:.4f} seconds")
+    print(f"-> NLS Parallel Throughput: {nls_par_throughput_ksps:.1f} kS/s\n") # ADDED
+
+    # --- EKF Fitter Benchmark ---
+    print("\n           EKF FITTER BENCHMARK")
+    print("-" * 60)
+    EKF_N_SECONDS = 100.0
+    EKF_REPETITIONS = 3
+    
+    n_samples_ekf = int(EKF_N_SECONDS * F_SAMP)
+    
+    print(f"Configuration:")
+    print(f"  - Data Duration: {EKF_N_SECONDS}s ({n_samples_ekf} samples)")
+    
+    dff_ekf, data_label_ekf = setup_benchmark_data(
+        n_seconds=EKF_N_SECONDS, f_samp=F_SAMP, fm=FM, label="ekf_data"
+    )
+
+    print("\nRunning EKF benchmark...")
+    ekf_fit_func = lambda: dff_ekf.fit(main_label=data_label_ekf, method='ekf', verbose=True)
+    ekf_time = run_timing(ekf_fit_func, repetitions=EKF_REPETITIONS)
+    
+    ekf_throughput_ksps = (n_samples_ekf / ekf_time) / 1000.0
+    print(f"-> Best EKF time: {ekf_time:.4f} seconds")
+    print(f"-> EKF Throughput: {ekf_throughput_ksps:.1f} kS/s\n")
+
+    # --- Final Results Summary ---
+    speedup = seq_time / par_time
+    
+    print("=" * 60)
+    print("                 FINAL BENCHMARK SUMMARY")
+    print("=" * 60)
+    print(f"Processor:          {cpu_name}")
+    print("\n--- NLS Fitter ---")
+    print(f"Sequential Time:    {seq_time:.2f} s (for {n_fits} fits on {NLS_N_SECONDS}s of data)")
+    print(f"Parallel Time:      {par_time:.2f} s ({n_cores} cores)")
+    print(f"Speedup Factor:     {speedup:.1f}x")
+    print(f"Throughput (Seq):   {nls_seq_throughput_ksps:.1f} kS/s")
+    print(f"Throughput (Par):   {nls_par_throughput_ksps:.1f} kS/s")
+    print("\n--- EKF Fitter ---")
+    print(f"Processing Time:    {ekf_time:.2f} s (for {EKF_N_SECONDS}s of data)")
+    print(f"Throughput:         {ekf_throughput_ksps:.1f} kS/s")
+    print("-" * 60)
