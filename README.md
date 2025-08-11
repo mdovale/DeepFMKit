@@ -62,47 +62,28 @@ The following example demonstrates the primary workflow: defining a physical sys
 ```python
 import deepfmkit.core as dfm
 import matplotlib.pyplot as plt
-
 # --- 1. Define the interferometer ---
-ifo = dfm.IfoConfig(
-	label="main_ifo")
-ifo.ref_arml = 0.1 # Reference armlength (m)
-ifo.meas_arml = 0.3 # Measurement armlength (m)
-
+ifo = dfm.IfoConfig()
+ifo.ref_arml = 0.10 # Reference armlength (m)
+ifo.meas_arml = 0.15 # Measurement armlength (m)
 # --- 2. Define the laser source ---
-laser = dfm.LaserConfig(
-	label="main_laser")
-laser.fm = 1e3 # FM frequency (Hz)
-laser.set_df_for_effect(
-	ifo,
-	6.54321) # Target m (rad)
-	
-# --- 4. Compose the main channel ---
-label = "main_channel"
-sim_obj = dfm.SimConfig(
-    label=label,
-    laser_config=laser,
+las = dfm.LaserConfig()
+las.fm = 1e3 # FM frequency (Hz)
+las.set_df_for_m(ifo, 6.) # Target m (rad)
+# --- 3. Compose the main channel ---
+sim = dfm.SimConfig("ch0",
+    laser_config=las,
     ifo_config=ifo,
-    f_samp=200e3) # Acquisition frequency (Hz)
-
-# --- 5. Instantiate the main framework ---
-dff = dfm.DeepFrame(sim_obj=sim_obj)
-
-# --- 6. Simulate ---
-dff.simulate(
-    label=label,
-    n_seconds=10, # Simulation length (s)
-    mode='snr',
-    snr_db=60)
-
-# --- 7. Print configuration ---
-sim_obj.info()
-
-# --- 8. Run readout algorithm ---
-dff.fit(label)
-
-# --- 9. Plot readout results ---
-axs = dff.plot()
+    f_samp=200e3) # Acquisition frequency (Hz) 
+# --- 4. Instantiate DeepFrame ---
+df = dfm.DeepFrame(sim_config=sim)
+# --- 5. Simulate ---
+df.simulate("ch0",
+    n_seconds=10) # Simulation length (s)
+# --- 6. Run readout algorithm ---
+df.fit("ch0")
+# --- 7. Plot readout results ---
+axes = df.plot(which=['phi', 'm', 'ssq'])
 plt.show()
 ```
 
