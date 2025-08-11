@@ -7,7 +7,8 @@ include pyproject.toml
 # Ship library source
 graft deepfmkit
 
-# Ship tests in sdist
+# Ship tests and examples in sdist
+graft examples
 graft tests
 include tests/*.gz
 
