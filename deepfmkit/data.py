@@ -34,6 +34,7 @@
 # foreign countries or providing access to foreign persons.
 #
 from deepfmkit.plotting import time_plot, dfm_axes, autoscale_y
+from deepfmkit.fit import DEFAULT_GUESS, DEFAULT_NDATA
 
 import numpy as np
 import pandas as pd
@@ -348,11 +349,11 @@ class FitData:
     fs: Optional[float] = None  # Fit data rate
     f_samp: Optional[float] = None  # Sampling frequency
     fm: Optional[float] = None  # Modulation frequency
-    ndata: int = 10  # Number of harmonics to use in fit
-    init_a: float = 1.6  # Initial value of the amplitude
-    init_m: float = 6.0  # Initial value of the effective modulation index
-    init_phi: float = 0.0  # Initial value of the interferometric phase
-    init_psi: float = 0.0  # Initial value of the modulation phase
+    ndata: int = DEFAULT_NDATA  # Number of harmonics to use in fit
+    init_a: float = DEFAULT_GUESS["amp"]  # Initial value of the amplitude
+    init_m: float = DEFAULT_GUESS["m"]  # Initial value of the effective modulation index
+    init_phi: float = DEFAULT_GUESS["phi"]  # Initial value of the interferometric phase
+    init_psi: float = DEFAULT_GUESS["psi"]  # Initial value of the modulation phase
     nbuf: Optional[int] = None  # Buffers contained in raw data
     time: Optional[np.ndarray] = None  # Fit time
     ssq: Optional[np.ndarray] = None  # Fit sum of squares

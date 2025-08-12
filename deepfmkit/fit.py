@@ -80,7 +80,7 @@ SINCOS_AMP_THRESHOLD = 0.1
 # Define the full parameter set for reference
 ALL_PARAMS = ["amp", "m", "phi", "psi"]
 DEFAULT_GUESS = {"amp": 1.6, "m": 6.0, "phi": 0.0, "psi": 0.0}
-
+DEFAULT_NDATA = 10
 
 def calculate_quadratures(
     n: int, data: np.ndarray, w0: float

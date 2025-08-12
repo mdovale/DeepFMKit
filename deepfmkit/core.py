@@ -35,9 +35,10 @@
 #
 from deepfmkit.data import RawData, FitData, open_txt_maybe_gzip
 from deepfmkit.physics import IfoConfig, LaserConfig, SimConfig, SignalGenerator
-from deepfmkit.fitters import StandardNLSFitter, EKFFitter
+from deepfmkit.fitters import EKFFitter, IntegratedEKFFitter, StandardNLSFitter
 from deepfmkit.dsp import vectorized_downsample
 from deepfmkit.plotting import plot_fit, plot_fit_comparison, plot_fit_difference
+from deepfmkit.fit import DEFAULT_GUESS, DEFAULT_NDATA
 
 import numpy as np
 import scipy.constants as sc
@@ -468,6 +469,8 @@ class DeepFrame:
         ndata: int,
         init_a: float,
         init_m: float,
+        init_phi: float,
+        init_psi: float,
     ) -> FitData:
         """Creates and registers a FitData object from a results DataFrame.
 
@@ -505,7 +508,7 @@ class DeepFrame:
         df = self.fits_df[fit_label]
 
         fit = FitData()
-        fit.n, fit.R, fit.fs, fit.nbuf, fit.ndata, fit.init_a, fit.init_m = (
+        fit.n, fit.R, fit.fs, fit.nbuf, fit.ndata, fit.init_a, fit.init_m, fit.init_phi, fit.init_psi = (
             n,
             R,
             fs,
@@ -513,6 +516,8 @@ class DeepFrame:
             ndata,
             init_a,
             init_m,
+            init_phi,
+            init_psi,
         )
 
         fit.t0 = self.raws[source_label].t0
@@ -608,6 +613,7 @@ class DeepFrame:
         fitter_map = {
             "nls": StandardNLSFitter,
             "ekf": EKFFitter,
+            "iekf": IntegratedEKFFitter,
         }
         if method not in fitter_map:
             raise ValueError(
@@ -640,9 +646,9 @@ class DeepFrame:
         fit_config = {"n": n_cycles}
 
         # --- Route method-specific kwargs to fit_config ---
-        if method == "ekf":
+        if "ekf" in method:
             config_keys = ["P0_diag", "Q_diag", "R_val"]
-        elif method == "nls":
+        elif "nls" in method:
             config_keys = ["ndata", "fit_params", "init_psi_method"]
         else:
             config_keys = []
@@ -660,10 +666,8 @@ class DeepFrame:
             main_raw.phi_sim_downsamp = vectorized_downsample(main_raw.phi_sim, R)
 
         # --- Instantiate and run the Fitter ---
-        fitter_args = {"main_raw": main_raw}
-
         fitter = FitterClass(fit_config)
-        results_df = fitter.fit(**fitter_args, **kwargs)
+        results_df = fitter.fit(main_raw=main_raw, **kwargs)
 
         # --- Create and store the FitData ---
         if results_df is None or results_df.empty:
@@ -672,7 +676,7 @@ class DeepFrame:
             )
             return None
 
-        if method in ["nls", "ekf"]:
+        if method in ["nls", "ekf", "iekf"]:
             results_df["tau"] = (
                 results_df["m"] / (2 * np.pi * main_raw.sim.laser.df)
                 if main_raw.sim
@@ -688,9 +692,11 @@ class DeepFrame:
             R,
             fs,
             nbuf,
-            fit_config.get("ndata", 0),
-            0,
-            0,
+            fit_config.get("ndata", DEFAULT_NDATA),
+            kwargs.get("init_a", DEFAULT_GUESS["amp"]),
+            kwargs.get("init_m", DEFAULT_GUESS["m"]),
+            kwargs.get("init_phi", DEFAULT_GUESS["phi"]),
+            kwargs.get("init_psi", DEFAULT_GUESS["psi"]),
         )
         self.fits[fit_label] = fit_obj
 

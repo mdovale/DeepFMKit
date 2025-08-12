@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 def _ekf_core_loop(data, t_axis, w_m, R_downsample, nbuf,
                    x_init, P_init, Q, R_val):
     """
-    Core JIT-compiled loop for the Extended Kalman Filter.
+    Core JIT-compiled loop for the basic Extended Kalman Filter.
     
     This function contains the performance-critical, sample-by-sample update
     loop. Decorating it with Numba's JIT compiler translates it into fast
@@ -125,6 +125,80 @@ def _ekf_core_loop(data, t_axis, w_m, R_downsample, nbuf,
 
         # Update state and covariance
         x = x + (K * y_k).flatten() # Simplified for scalar measurement
+        P = (np.eye(dim_x) - K @ H) @ P
+
+        # Store result at the downsampled rate
+        if (k + 1) % R_downsample == 0:
+            buf_idx = (k + 1) // R_downsample - 1
+            if buf_idx >= 0 and buf_idx < nbuf:
+                results[buf_idx, :] = x
+                
+    return x, results
+
+@jit(nopython=True)
+def _integrated_ekf_core_loop(data_ac, t_axis, w_m, dt, R_downsample, nbuf,
+                              x_init, P_init, Q, R_val):
+    """
+    Core JIT-compiled loop for the EKF with a constant velocity process model.
+    
+    This function contains the performance-critical, sample-by-sample update
+    loop. Decorating it with Numba's JIT compiler translates it into fast
+    machine code, dramatically increasing performance.
+    
+    Parameters are all simple NumPy arrays or scalars for Numba compatibility.
+    
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        A tuple containing:
+        - The final state vector `x`.
+        - The results array populated at the downsampled rate.
+    """
+    # --- Initialization ---
+    dim_x = 8
+    x = x_init.copy()
+    P = P_init.copy()
+    R = np.array([[R_val]])
+    
+    # State transition matrix F for constant velocity model
+    F_block = np.array([[1.0, dt], [0.0, 1.0]])
+    F = np.zeros((dim_x, dim_x))
+    for i in range(dim_x // 2):
+        F[2*i:2*i+2, 2*i:2*i+2] = F_block
+        
+    results = np.zeros((nbuf, dim_x))
+    n_samp = len(data_ac)
+
+    # --- Main Loop ---
+    for k in range(n_samp):
+        # --- 1. PREDICT STEP ---
+        x = F @ x
+        P = F @ P @ F.T + Q
+
+        # --- 2. UPDATE STEP ---
+        # Unpack state parameters (not rates) for measurement model
+        phi, _, psi, _, m, _, c, _ = x
+        
+        # Measurement function h(x) - AC model only
+        theta = w_m * t_axis[k] + psi
+        full_phase_arg = phi + m * np.cos(theta)
+        h_x = c * np.cos(full_phase_arg)
+
+        # Jacobian H (1x8 sparse matrix)
+        sin_full_arg = np.sin(full_phase_arg)
+        H = np.zeros((1, dim_x))
+        H[0, 0] = -c * sin_full_arg                    # d(h)/d(phi)
+        H[0, 2] = c * m * sin_full_arg * np.sin(theta) # d(h)/d(psi)
+        H[0, 4] = -c * sin_full_arg * np.cos(theta)    # d(h)/d(m)
+        H[0, 6] = np.cos(full_phase_arg)               # d(h)/d(c)
+
+        # Innovation and Kalman Gain
+        y_k = data_ac[k] - h_x
+        S = H @ P @ H.T + R
+        K = (P @ H.T) @ np.linalg.inv(S)
+
+        # Update state and covariance
+        x = x + (K * y_k).flatten()
         P = (np.eye(dim_x) - K @ H) @ P
 
         # Store result at the downsampled rate
@@ -395,6 +469,121 @@ class EKFFitter(BaseFitter):
 
         return pd.DataFrame(df_dict)
     
+class IntegratedEKFFitter(BaseFitter):
+    """A fitter using an EKF with an integrated random walk (constant velocity) process model.
+
+    This fitter operates in the time domain on the AC-coupled signal, updating 
+    its 8-dimensional state estimate (four parameters and their rates of change)
+    with every incoming data sample. It is designed for tracking systems where
+    parameters are expected to have a persistent, linear drift.
+
+    The performance-critical `for` loop is Just-In-Time (JIT) compiled using
+    Numba, enabling high throughput suitable for real-time processing.
+    """
+    def __init__(self, fit_config: Dict[str, Any]):
+        """Initializes the Integrated EKF fitter with its tuning parameters.
+
+        Parameters
+        ----------
+        fit_config : dict
+            A dictionary of fitting parameters, including:
+            - n (int): The number of modulation cycles per output buffer.
+            - P0_diag (list[float], optional): Diagonal of the initial state
+              covariance `P` (length 8).
+            - Q_diag (list[float], optional): Diagonal of the process noise
+              covariance `Q` (length 8). Represents noise on the parameter
+              accelerations.
+            - R_val (float, optional): Measurement noise variance `R`. If None,
+              it is estimated from the variance of the input data at runtime.
+              Defaults to None.
+        """
+        super().__init__(fit_config)
+        self.P0_diag = self.config.get("P0_diag", [1.0] * 8)
+        self.Q_diag = self.config.get("Q_diag", [1e-10] * 8)
+        self.R_val = self.config.get("R_val", None)
+
+    def fit(self, main_raw: RawData, **kwargs: Any) -> pd.DataFrame:
+        """Processes raw data sequentially using a high-performance integrated EKF.
+
+        This method prepares the AC-coupled data, sets up the initial state and
+        covariance matrices, and then dispatches the main computational work to a 
+        JIT-compiled core function, `_integrated_ekf_core_loop`.
+
+        Parameters
+        ----------
+        main_raw : RawData
+            The raw data object for the primary channel.
+        **kwargs : Any
+            Keyword arguments for EKF state initialization:
+            - init_c, init_m, init_phi, init_psi (float): Initial state guesses.
+            - verbose (bool): If True, shows a progress bar.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the EKF state estimates over time.
+        """
+        # --- 0. Unpack Configuration and Data ---
+        raw_data_np = main_raw.data["ch0"].to_numpy()
+        data_dc = np.mean(raw_data_np)
+        data_ac = raw_data_np - data_dc # Use AC-coupled data
+        verbose = kwargs.get("verbose", True)
+        
+        # Initial guesses for the state (rates default to 0.0)
+        init_phi = kwargs.get("init_phi", DEFAULT_GUESS["phi"])
+        init_psi = kwargs.get("init_psi", DEFAULT_GUESS["psi"])
+        init_m = kwargs.get("init_m", DEFAULT_GUESS["m"])
+        init_c = kwargs.get("init_c", np.std(data_ac) * np.sqrt(2)) # Robust AC amplitude guess
+
+        # --- 1. Prepare Inputs for JIT-Compiled Function ---
+        x_init = np.array([
+            init_phi, 0.0,  # phi, phi_dot
+            init_psi, 0.0,  # psi, psi_dot
+            init_m,   0.0,  # m, m_dot
+            init_c,   0.0,  # c, c_dot
+        ], dtype=np.float64)
+        
+        P_init = np.diag(self.P0_diag).astype(np.float64)
+        Q = np.diag(self.Q_diag).astype(np.float64)
+
+        if self.R_val is None:
+            R_val_actual = np.var(data_ac)
+            logging.debug(f"IntegratedEKF R_val estimated from AC data variance: {R_val_actual:.4g}")
+        else:
+            R_val_actual = self.R_val
+        
+        n_samp = len(data_ac)
+        dt = 1 / main_raw.f_samp
+        w_m = 2 * np.pi * main_raw.fm
+        t_axis = np.arange(n_samp) * dt
+
+        R_downsample, _, nbuf = _calculate_fit_params(main_raw, self.config["n"])
+
+        # --- 2. Call the High-Performance Core Loop ---
+        logging.info(f"Running JIT-compiled Integrated EKF for {n_samp} samples...")
+        if verbose:
+            print("Numba JIT compilation may take a moment on the first run...")
+
+        _, results = _integrated_ekf_core_loop(
+            data_ac, t_axis, w_m, dt, R_downsample, nbuf,
+            x_init, P_init, Q, R_val_actual
+        )
+        
+        logging.info("Integrated EKF processing finished.")
+
+        # --- 3. Create and return results DataFrame ---
+        df_dict = {
+            "amp": results[:, 6], "dc": data_dc,
+            "phi": results[:, 0], "phi_dot": results[:, 1],
+            "psi": results[:, 2], "psi_dot": results[:, 3],
+            "m":   results[:, 4], "m_dot": results[:, 5],
+            "c":   results[:, 6], "c_dot": results[:, 7],
+            "ssq": np.zeros(nbuf),
+            "fitok": np.ones(nbuf, dtype=int),
+        }
+
+        return pd.DataFrame(df_dict)
+
 class StandardNLSFitter(BaseFitter):
     """A fitter using the standard frequency-domain Non-Linear Least Squares method.
 
