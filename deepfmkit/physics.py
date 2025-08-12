@@ -190,9 +190,9 @@ class LaserConfig:
         ASD of laser frequency noise at 1 Hz, in Hz/sqrt(Hz).
     df_n : float
         ASD of modulation amplitude noise at 1 Hz, in Hz/sqrt(Hz).
-    amp_n : float
+    r_n : float
         ASD of signal amplitude noise at 1 Hz, in V/sqrt(Hz).
-    f_n_alpha, df_n_alpha, amp_n_alpha : float
+    f_n_alpha, df_n_alpha, r_n_alpha : float
         The exponents `alpha` for the 1/f^alpha power spectra of the
         corresponding noise sources.
     """
@@ -218,11 +218,11 @@ class LaserConfig:
     # Noise levels:
     f_n: float = 0.0  # ASD of frequency noise (Hz/sqrt(Hz) @ 1 Hz)
     df_n: float = 0.0  # ASD of modulation amplitude noise (Hz/sqrt(Hz) @ 1 Hz)
-    amp_n: float = 0.0  # ASD of amplitude noise (V/sqrt(Hz) @ 1 Hz)
+    r_n: float = 0.0  # ASD of relative intensity noise (V/sqrt(Hz) @ 1 Hz)
     # Color of noise (PSD \propto 1/f^alpha):
     f_n_alpha: float = 2.0  # Color of frequency noise
     df_n_alpha: float = 0.0  # Color of modulation amplitude noise
-    amp_n_alpha: float = 0.0  # Color of amplitude noise
+    r_n_alpha: float = 0.0  # Color of relative intensity noise
 
     def __post_init__(self):
         """Validates the configuration after initialization."""
@@ -236,7 +236,7 @@ class LaserConfig:
             raise TypeError("waveform_func must be callable.")
 
         # noise ASDs (must be finite and ≥ 0)
-        for name, val in (("f_n", self.f_n), ("df_n", self.df_n), ("amp_n", self.amp_n)):
+        for name, val in (("f_n", self.f_n), ("df_n", self.df_n), ("r_n", self.r_n)):
             if not (math.isfinite(val) and val >= 0.0):
                 raise ValueError(f"{name} must be a finite, non-negative ASD.")
 
@@ -244,7 +244,7 @@ class LaserConfig:
         alphas = {
             "f_n_alpha": self.f_n_alpha,
             "df_n_alpha": self.df_n_alpha,
-            "amp_n_alpha": self.amp_n_alpha,
+            "r_n_alpha": self.r_n_alpha,
         }
         bad = [k for k, v in alphas.items() if not is_valid_alpha(v)]
         if bad:
@@ -397,8 +397,9 @@ class LaserConfig:
         # --- 4. Generate Noise Arrays and Run Full Simulation Physics ---
         sg = SignalGenerator()
         noise_arrays = sg._generate_noise_arrays(
-            dummy_dfmi_channel, n_total_samples_plot, noise_seed
+            dummy_dfmi_channel, n_total_samples_plot, trial_num=noise_seed
         )
+        
         witness_freq, witness_phase, _ = sg._run_physics_simulation(
             dummy_dfmi_channel,
             time_axis,
@@ -879,7 +880,7 @@ class SignalGenerator:
 
         # Apply the safe slicing
         raw_main.f_noise = safe_slice(noise.get("laser_frequency", 0.0), valid_slice)
-        raw_main.a_noise = safe_slice(noise.get("laser_amplitude", 0.0), valid_slice)
+        raw_main.a_noise = safe_slice(noise.get("laser_rin", 0.0), valid_slice)
         raw_main.l_noise = safe_slice(noise.get("armlength", 0.0), valid_slice)
         raw_main.s_noise = safe_slice(noise.get("electronic", 0.0), valid_slice)
         raw_main.df_noise = safe_slice(noise.get("df", 0.0), valid_slice)
@@ -918,7 +919,7 @@ class SignalGenerator:
                 noise.get("laser_frequency", 0.0), valid_slice
             )
             raw_witness.a_noise = safe_slice(
-                noise.get("laser_amplitude", 0.0), valid_slice
+                noise.get("laser_rin", 0.0), valid_slice
             )
             raw_witness.df_noise = safe_slice(
                 noise.get("df", 0.0), valid_slice
@@ -1104,8 +1105,8 @@ class SignalGenerator:
             "laser_frequency": {
                 "asd": sim_config.laser.f_n, "alpha": sim_config.laser.f_n_alpha
             },
-            "laser_amplitude": {
-                "asd": sim_config.laser.amp_n, "alpha": sim_config.laser.amp_n_alpha
+            "laser_rin": {
+                "asd": sim_config.laser.r_n, "alpha": sim_config.laser.r_n_alpha
             },
             "df": {
                 "asd": sim_config.laser.df_n, "alpha": sim_config.laser.df_n_alpha
@@ -1411,7 +1412,7 @@ class SignalGenerator:
             + phase_noise_from_laser  # Phase noise from laser frequency jitter
         )
 
-        amplitude_effective = laser.amp + noise_arrays.get("laser_amplitude", 0.0)
+        amplitude_effective = laser.amp*(1 + noise_arrays.get("laser_rin", 0.0))
 
         voltage_signal = amplitude_effective * (
             1 + ifo.visibility * np.cos(dfmi_phase)

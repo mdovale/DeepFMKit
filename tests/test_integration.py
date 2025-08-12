@@ -101,7 +101,7 @@ def test_workflow_with_realistic_noise(basic_sim_config):
     sim_config = basic_sim_config.copy()
 
     sim_config.laser.f_n = 100.0
-    sim_config.laser.amp_n = 1e-4
+    sim_config.laser.r_n = 1e-4
     sim_config.laser.df_n = 1e3
     sim_config.ifo.arml_n = 1e-12
     sim_config.use_exact_physics = True

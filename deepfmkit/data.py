@@ -120,8 +120,10 @@ class RawData:
         The laser frequency noise time-series from a simulation.
     l_noise : np.ndarray, optional
         The armlength noise time-series from a simulation.
-    a_noise : np.ndarray, optional
-        The signal amplitude noise time-series from a simulation.
+    r_noise : np.ndarray, optional
+        The time-series of laser relative intensity noise from a simulation.
+    s_noise : np.ndarray, optional
+        The time-series of detector noise from a simulation.
     df_noise : np.ndarray, optional
         The laser modulation amplitude noise time-series from a simulation.
     """
@@ -144,8 +146,8 @@ class RawData:
     phi_sim_downsamp: Optional[np.array] = None  # phi_sim downsampled
     f_noise: Optional[np.array] = None  # Laser frequency noise
     l_noise: Optional[np.array] = None  # Armlength modulation noise
-    a_noise: Optional[np.array] = None  # Laser amplitude noise
-    s_noise: Optional[np.array] = None  # Electronic noise
+    r_noise: Optional[np.array] = None  # Relative intensity noise
+    s_noise: Optional[np.array] = None  # Detector noise (e.g., shot noise, electronic noise)
     df_noise: Optional[np.array] = None  # Laser frequency modulation amplitude noise
 
     def info(self) -> None:
