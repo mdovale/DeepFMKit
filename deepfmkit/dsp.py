@@ -285,8 +285,7 @@ def mean_filter(
     method : str, optional
         The estimation method. One of ['mean', 'midpoint', 'bessel'].
         - 'mean': Simple average. Fast but fundamentally biased for DFMI signals.
-        - 'midpoint': Calculates (max + min) / 2. Fast and accurate if the
-          buffer contains the signal's true extrema. Recommended default.
+        - 'midpoint': Calculates (max + min) / 2. Fast and more accurate.
         - 'bessel': Model-based correction. Calculates mean(data) and subtracts
           the analytically known Bessel function bias. Most accurate method if
           good estimates for C, m, and phi are available.
@@ -301,7 +300,7 @@ def mean_filter(
     Returns
     -------
     float
-        The estimated DC offset (A).
+        The estimated DC offset.
         
     Raises
     ------

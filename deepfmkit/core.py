@@ -531,6 +531,12 @@ class DeepFrame:
         fit.phi = df["phi"].to_numpy()
         fit.psi = df["psi"].to_numpy()
         fit.dc = df["dc"].to_numpy()
+
+        # Extra states from IntegratedEKFFitter:
+        for col in ("phi_dot", "psi_dot", "m_dot", "amp_dot", "dc_dot"):
+            if col in df.columns:
+                setattr(fit, col, df[col].to_numpy())
+
         fit.time = np.arange(0, fit.ssq.shape[0] / fit.fs, 1.0 / fit.fs)
         fit.label = fit_label
 
