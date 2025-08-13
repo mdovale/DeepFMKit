@@ -41,9 +41,9 @@ provide specific implementations of different readout algorithms. This allows
 the user to select an algorithm at runtime via the `DeepFrame.fit()` method.
 
 Available Fitters:
-- StandardNLSFitter: A high-performance Non-Linear Least Squares
+- StandardNLS: A high-performance Non-Linear Least Squares
   fitter operating in the frequency domain.
-- EKFFitter: A time-domain Extended Kalman Filter for real-time state
+- StandardEKF: A time-domain Extended Kalman Filter for real-time state
   tracking.
 """
 
@@ -376,7 +376,7 @@ class BaseFitter(ABC):
         """
         pass
 
-class EKFFitter(BaseFitter):
+class StandardEKF(BaseFitter):
     """A fitter that performs state estimation using an Extended Kalman Filter.
 
     This fitter operates in the time domain, updating its state estimate with
@@ -484,7 +484,7 @@ class EKFFitter(BaseFitter):
 
         return pd.DataFrame(df_dict)
     
-class IntegratedEKFFitter(BaseFitter):
+class IntegratedEKF(BaseFitter):
     """A fitter using an EKF with an integrated random walk (constant velocity) process model.
 
     This fitter operates in the time domain on the AC-coupled signal, updating 
@@ -599,7 +599,7 @@ class IntegratedEKFFitter(BaseFitter):
 
         return pd.DataFrame(df_dict)
 
-class StandardNLSFitter(BaseFitter):
+class StandardNLS(BaseFitter):
     """A fitter using the standard frequency-domain Non-Linear Least Squares method.
 
     This class encapsulates a high-performance, block-parallel fitting

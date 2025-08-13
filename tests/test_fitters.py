@@ -51,12 +51,12 @@ def compare_angles(a1, a2, atol):
     assert np.min([diff, 2 * np.pi - diff]) < atol
 
 
-# --- Tests for StandardNLSFitter ---
+# --- Tests for StandardNLS ---
 
 
 def test_nls_fitter_sequential_vs_parallel(basic_sim_config):
     """
-    Validates that the StandardNLSFitter produces identical results when run
+    Validates that the StandardNLS produces identical results when run
     in sequential mode versus parallel mode. This is a critical consistency check.
     """
     dff = DeepFrame()
@@ -160,12 +160,12 @@ def test_nls_fitter_psi_init(basic_sim_config):
     assert psi_error_smart < 1e-5
 
 
-# --- Tests for EKFFitter ---
+# --- Tests for StandardEKF ---
 
 
 def test_ekf_fitter_converges_on_static_signal(basic_sim_config):
     """
-    Tests that the EKFFitter converges to the correct parameters for a
+    Tests that the StandardEKF converges to the correct parameters for a
     static, noiseless signal.
     """
     dff = DeepFrame()
@@ -192,7 +192,7 @@ def test_ekf_fitter_converges_on_static_signal(basic_sim_config):
 
 def test_iekf_fitter_converges_on_static_signal(basic_sim_config):
     """
-    Tests that the EKFFitter converges to the correct parameters for a
+    Tests that the StandardEKF converges to the correct parameters for a
     static, noiseless signal.
     """
     dff = DeepFrame()

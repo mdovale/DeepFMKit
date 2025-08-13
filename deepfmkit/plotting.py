@@ -896,6 +896,7 @@ def asd_plot(
 def plot_fit(
     framework: Any,
     labels: Optional[List[str]] = None,
+    relabels: Optional[List[str]] = None,
     which: Optional[List[str]] = None,
     figsize: Optional[Tuple[float, float]] = None,
     dpi: int = 150,
@@ -957,6 +958,12 @@ def plot_fit(
     key_to_ax = dict(zip(which, axs))
     selected_labels = labels if labels is not None else list(framework.fits.keys())
 
+    if relabels is not None and len(relabels) != len(selected_labels):
+        raise ValueError(
+            f"Number of relabels ({len(relabels)}) does not match the number of labels "
+            f"({len(selected_labels)}). Each label must have a corresponding relabel."
+        )
+
     if styles is not None and len(styles) != len(selected_labels):
         raise ValueError("Length of `styles` must match length of `labels`.")
 
@@ -964,6 +971,11 @@ def plot_fit(
         if k not in framework.fits:
             print(f"Warning: Fit label '{k}' not found in framework.fits. Skipping.")
             continue
+
+        if relabels:
+            label = relabels[i]
+        else:
+            label = str(k)
 
         fit = framework.fits[k]
         plot_kwargs = dict(kwargs)
@@ -981,10 +993,10 @@ def plot_fit(
                 continue
 
             if key == "ssq":
-                ax.semilogy(fit.time, data_to_plot, label=str(k), **plot_kwargs)
+                ax.semilogy(fit.time, data_to_plot, label=label, **plot_kwargs)
                 ax.set_ylabel("SSQ")
             else:
-                ax.plot(fit.time, data_to_plot, label=str(k), **plot_kwargs)
+                ax.plot(fit.time, data_to_plot, label=label, **plot_kwargs)
                 if key == "psi":
                     ax.set_ylabel(r"$\Psi$ (rad)")
                 elif key == "phi":

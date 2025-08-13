@@ -35,7 +35,7 @@
 #
 from deepfmkit.data import RawData, FitData, open_txt_maybe_gzip
 from deepfmkit.physics import IfoConfig, LaserConfig, SimConfig, SignalGenerator
-from deepfmkit.fitters import EKFFitter, IntegratedEKFFitter, StandardNLSFitter
+from deepfmkit.fitters import StandardEKF, IntegratedEKF, StandardNLS
 from deepfmkit.dsp import vectorized_downsample
 from deepfmkit.plotting import plot_fit, plot_fit_comparison, plot_fit_difference
 from deepfmkit.fit import DEFAULT_GUESS, DEFAULT_NDATA
@@ -532,7 +532,7 @@ class DeepFrame:
         fit.psi = df["psi"].to_numpy()
         fit.dc = df["dc"].to_numpy()
 
-        # Extra states from IntegratedEKFFitter:
+        # Extra states from IntegratedEKF:
         for col in ("phi_dot", "psi_dot", "m_dot", "amp_dot", "dc_dot"):
             if col in df.columns:
                 setattr(fit, col, df[col].to_numpy())
@@ -633,9 +633,9 @@ class DeepFrame:
         """
         # --- 1. Select the Fitter class ---
         fitter_map = {
-            "nls": StandardNLSFitter,
-            "ekf": EKFFitter,
-            "iekf": IntegratedEKFFitter,
+            "nls": StandardNLS,
+            "ekf": StandardEKF,
+            "iekf": IntegratedEKF,
         }
         if method not in fitter_map:
             raise ValueError(

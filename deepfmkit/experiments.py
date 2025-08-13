@@ -55,7 +55,7 @@ parallel execution, which is crucial for high-throughput studies:
 - **No Nested Parallelism**: The `Experiment` class is the sole manager of the
   `multiprocessing.Pool`. To prevent deadlocks and undefined behavior, any
   fitter called by a worker *must* be run in its sequential mode (e.g.,
-  `StandardNLSFitter` with `parallel=False`).
+  `StandardNLS` with `parallel=False`).
 """
 
 from deepfmkit import core as dfm
