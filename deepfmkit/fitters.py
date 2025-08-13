@@ -49,6 +49,7 @@ Available Fitters:
 
 from deepfmkit.fit import fit, calculate_quadratures, ALL_PARAMS, DEFAULT_GUESS
 from deepfmkit.data import RawData
+from deepfmkit.dsp import mean_filter
 
 import os
 import math
@@ -211,6 +212,7 @@ def _integrated_ekf_core_loop(raw_data, t_axis, w_m, dt, R_downsample, nbuf,
                 
     return x, results
 
+
 def _process_fit_chunk(args: tuple) -> List[Dict[str, Any]]:
     """Worker function for parallel NLS fitting.
 
@@ -270,7 +272,10 @@ def _process_fit_chunk(args: tuple) -> List[Dict[str, Any]]:
                 "m": fit_parm_full[1],
                 "phi": fit_parm_full[2],
                 "psi": fit_parm_full[3],
-                "dc": np.mean(buffer_data),
+                "dc": mean_filter(buffer_data, method="bessel", 
+                                C=fit_parm_full[0], 
+                                m=fit_parm_full[1], 
+                                phi=fit_parm_full[2]),
                 "ssq": fit_ssq,
                 "fitok": status,
             }
@@ -313,6 +318,7 @@ def _calculate_fit_params(raw_obj: RawData, n: int) -> Tuple[int, float, int]:
         )
     nbuf = N // R
     return R, fs, nbuf
+
 
 
 class BaseFitter(ABC):
@@ -847,7 +853,10 @@ class StandardNLSFitter(BaseFitter):
             "m": fit_parm_full[1],
             "phi": fit_parm_full[2],
             "psi": fit_parm_full[3],
-            "dc": np.mean(raw_buffer),
+            "dc": mean_filter(raw_buffer, method="bessel", 
+                              C=fit_parm_full[0], 
+                              m=fit_parm_full[1], 
+                              phi=fit_parm_full[2]),
             "ssq": fit_ssq,
             "fitok": status,
         }

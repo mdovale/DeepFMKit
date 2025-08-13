@@ -35,6 +35,7 @@
 # foreign countries or providing access to foreign persons.
 #
 import numpy as np
+from scipy.special import j0
 
 import logging
 
@@ -265,3 +266,67 @@ def vectorized_downsample(signal, R):
     # The '-1' automatically calculates the correct number of rows.
     # Then, compute the mean along axis=1 to average each block of R samples.
     return trimmed_signal.reshape(-1, R).mean(axis=1)
+
+
+def mean_filter(
+    data: np.ndarray,
+    method: str = "mean",
+    C: float = 0.0,
+    m: float = 0.0,
+    phi: float = 0.0
+) -> float:
+    """
+    Helper function to compute a signal's DC value using various methods.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        The input signal buffer.
+    method : str, optional
+        The estimation method. One of ['mean', 'midpoint', 'bessel'].
+        - 'mean': Simple average. Fast but fundamentally biased for DFMI signals.
+        - 'midpoint': Calculates (max + min) / 2. Fast and accurate if the
+          buffer contains the signal's true extrema. Recommended default.
+        - 'bessel': Model-based correction. Calculates mean(data) and subtracts
+          the analytically known Bessel function bias. Most accurate method if
+          good estimates for C, m, and phi are available.
+        Defaults to "mean".
+    C : float, optional
+        Estimate of the AC amplitude (A*k). Required for the 'bessel' method.
+    m : float, optional
+        Estimate of the modulation depth. Required for the 'bessel' method.
+    phi : float, optional
+        Estimate of the interferometric phase. Required for the 'bessel' method.
+
+    Returns
+    -------
+    float
+        The estimated DC offset (A).
+        
+    Raises
+    ------
+    ValueError
+        If an invalid method is specified or required parameters are missing.
+    """
+    if method == "mean":
+        return np.mean(data)
+    
+    elif method == "midpoint":
+        # This is the correct way to estimate the DC offset from extrema.
+        # It finds the center point between the signal's peak and trough.
+        return (np.max(data) + np.min(data)) / 2.0
+    
+    elif method == "bessel":
+        # This is the most accurate method. It corrects the simple mean
+        # for the known analytical bias from the J0 Bessel function.
+        if C == 0.0 or m == 0.0:
+            raise ValueError("Parameters 'C' and 'm' must be provided for the 'bessel' method.")
+            
+        # Bias = C * cos(phi) * J0(m)
+        bias = C * np.cos(phi) * j0(m)
+        
+        # True DC = Measured Mean - Bias
+        return np.mean(data) - bias
+        
+    else:
+        raise ValueError(f"Invalid method '{method}'. Expected 'mean', 'midpoint', or 'bessel'.")
