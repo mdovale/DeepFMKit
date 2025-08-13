@@ -581,33 +581,49 @@ class DeepFrame:
         main_label: str,
         method: str = "nls",
         fit_label: Optional[str] = None,
+        fit_config: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
-    ) -> FitData:
+    ) -> Optional[FitData]:
         """Fits raw data using a specified algorithm.
 
         This unified fitting interface selects a fitter class based on the
-        `method` string, instantiates it, and executes the fit. It acts as a
-        dispatcher using the Strategy design pattern.
+        `method` string, instantiates it with the appropriate configuration,
+        and executes the fit.
 
         Parameters
         ----------
         main_label : str
             The label of the `RawData` object in `self.raws` to be fit.
         method : str, optional
-            The fitting algorithm to use. Available methods: 'nls', 'ekf'.
+            The fitting algorithm to use. Available methods: 'nls', 'ekf', 'iekf'.
             Defaults to 'nls'.
         fit_label : str, optional
             The label for the output `FitData`. If None, a label is
             auto-generated. Defaults to None.
+        fit_config : dict, optional
+            A dictionary of parameters to be passed to the fitter's
+            constructor. This is the recommended way to provide custom
+            fitter tuning (e.g., `{'Q_diag': [...], 'P0_diag': [...]}`).
+            Defaults to None.
         **kwargs : Any
-            Additional keyword arguments passed directly to the selected
-            fitter's `fit()` method.
+            Additional keyword arguments. These can include parameters for the
+            fitter's constructor (for backward compatibility) and parameters
+            for the fitter's `fit()` method itself (e.g., `init_phi`).
 
         Returns
         -------
-        FitData
+        FitData or None
             A fit object containing the results, which is also stored in
             `self.fits`. Returns None on failure.
+
+        Usage
+        -----
+        # Recommended way to provide custom tuning for a fitter:
+        my_config = {'Q_diag': [1e-3]*10, 'P0_diag': [0.1]*10}
+        dff.fit(main_label, method='iekf', fit_config=my_config)
+
+        # Alternative way (less explicit, for backward compatibility):
+        dff.fit(main_label, method='iekf', Q_diag=[1e-3]*10, P0_diag=[0.1]*10)
         """
         # --- 1. Select the Fitter class ---
         fitter_map = {
@@ -619,13 +635,12 @@ class DeepFrame:
             raise ValueError(
                 f"Unknown fit method: '{method}'. Available: {list(fitter_map.keys())}"
             )
-
         FitterClass = fitter_map[method]
         logging.debug(
             f"Dispatching to {FitterClass.__name__} for label '{main_label}'."
         )
 
-        # --- Prepare data and config ---
+        # --- 2. Prepare data and config ---
         if main_label not in self.raws:
             raise KeyError(
                 f"Invalid raw data label: '{main_label}' not found in self.raws."
@@ -636,27 +651,29 @@ class DeepFrame:
             fit_label = f"{main_label}_{method}"
 
         # Get 'n' for the fit config, which is common to all fitters
-        n_cycles = kwargs.get("n")
+        n_cycles = kwargs.pop("n", None) # Use pop to remove it from kwargs
         if n_cycles is None:
             sim_obj = self.sims.get(main_raw.sim.label if main_raw.sim else main_label)
             n_cycles = sim_obj.fit_n if sim_obj else 20
-        kwargs.pop("n", None)
 
-        # The base config for all fitters
-        fit_config = {"n": n_cycles}
+        # --- 3. Build the Fitter Configuration Dictionary ---
+        # Start with the base config common to all fitters
+        config_for_fitter = {"n": n_cycles}
 
-        # --- Route method-specific kwargs to fit_config ---
-        if "ekf" in method:
-            config_keys = ["P0_diag", "Q_diag", "R_val"]
-        elif "nls" in method:
-            config_keys = ["ndata", "fit_params", "init_psi_method"]
-        else:
-            config_keys = []
+        # The new, recommended way: update from the fit_config dictionary
+        if fit_config is not None:
+            config_for_fitter.update(fit_config)
+
+        # Legacy support: also check for constructor args in kwargs
+        # A parameter in `fit_config` will take precedence over one in `kwargs`.
+        fitter_constructor_keys = ["P0_diag", "Q_diag", "R_val", "ndata", "fit_params", "init_psi_method"]
+        for key in fitter_constructor_keys:
+            if key in kwargs and key not in config_for_fitter:
+                config_for_fitter[key] = kwargs.pop(key)
+
+        # --- 4. Instantiate and run the Fitter ---
+        fitter = FitterClass(config_for_fitter)
         
-        for key in config_keys:
-            if key in kwargs:
-                fit_config[key] = kwargs.pop(key)
-
         R, fs, nbuf = self._fit_init(main_label, n_cycles)
         if (
             hasattr(main_raw, "phi_sim")
@@ -664,12 +681,11 @@ class DeepFrame:
             and len(main_raw.phi_sim) > 0
         ):
             main_raw.phi_sim_downsamp = vectorized_downsample(main_raw.phi_sim, R)
-
-        # --- Instantiate and run the Fitter ---
-        fitter = FitterClass(fit_config)
+            
+        # `kwargs` now only contains arguments for the fitter's .fit() method
         results_df = fitter.fit(main_raw=main_raw, **kwargs)
 
-        # --- Create and store the FitData ---
+        # --- 5. Create and store the FitData ---
         if results_df is None or results_df.empty:
             logging.warning(
                 f"{FitterClass.__name__} returned no results for '{main_label}'."
@@ -679,7 +695,7 @@ class DeepFrame:
         if method in ["nls", "ekf", "iekf"]:
             results_df["tau"] = (
                 results_df["m"] / (2 * np.pi * main_raw.sim.laser.df)
-                if main_raw.sim
+                if main_raw.sim and main_raw.sim.laser.df != 0
                 else 0.0
             )
 
@@ -692,7 +708,7 @@ class DeepFrame:
             R,
             fs,
             nbuf,
-            fit_config.get("ndata", DEFAULT_NDATA),
+            config_for_fitter.get("ndata", DEFAULT_NDATA),
             kwargs.get("init_a", DEFAULT_GUESS["amp"]),
             kwargs.get("init_m", DEFAULT_GUESS["m"]),
             kwargs.get("init_phi", DEFAULT_GUESS["phi"]),
@@ -701,7 +717,7 @@ class DeepFrame:
         self.fits[fit_label] = fit_obj
 
         return fit_obj
-
+    
     def create_witness_channel(
         self,
         main_channel_label: str,
