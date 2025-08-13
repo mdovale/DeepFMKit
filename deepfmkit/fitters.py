@@ -391,7 +391,7 @@ class EKFFitter(BaseFitter):
         """
         super().__init__(fit_config)
         self.P0_diag = self.config.get("P0_diag", [1.0] * 5)
-        self.Q_diag = self.config.get("Q_diag", [1e-6]*5)
+        self.Q_diag = self.config.get("Q_diag", [1e-6] * 5)
         self.R_val = self.config.get("R_val", None) # Default to None for dynamic estimation
 
     def fit(self, main_raw: RawData, **kwargs: Any) -> pd.DataFrame:

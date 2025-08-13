@@ -174,17 +174,43 @@ def test_ekf_fitter_converges_on_static_signal(basic_sim_config):
         label="test_sim", n_seconds=50e-3, mode="snr", snr_db=80
     )  # A little noise helps EKF
 
-    fit_obj = dff.fit(
-        main_label="test_sim",
-        method="ekf",
-        # Use a higher process noise to allow for faster initial convergence
-        Q_diag=[1e-6, 1e-6, 1e-5, 1e-5, 1e-6],
-    )
+    fit_obj = dff.fit(main_label="test_sim", method="ekf",
+                      fit_config={
+                          "P0_diag": [1.0] * 5,
+                          "Q_diag": [1e-6] * 5,
+                          "R_val": None,
+                          })
     results = dff.fits_df[fit_obj.label]
 
     # Check the final converged values (last row of the results)
     final_values = results.iloc[-1]
+    assert final_values["amp"] == pytest.approx(basic_sim_config.laser.amp, rel=1e-4)
+    assert final_values["m"] == pytest.approx(basic_sim_config.m, rel=1e-4)
+    compare_angles(final_values["phi"], basic_sim_config.ifo.phi, atol=1e-4)
+    compare_angles(final_values["psi"], basic_sim_config.laser.psi, atol=1e-4)
 
+
+def test_iekf_fitter_converges_on_static_signal(basic_sim_config):
+    """
+    Tests that the EKFFitter converges to the correct parameters for a
+    static, noiseless signal.
+    """
+    dff = DeepFrame()
+    dff.add_sim(basic_sim_config)
+    dff.simulate(
+        label="test_sim", n_seconds=50e-3, mode="snr", snr_db=80
+    )  # A little noise helps EKF
+
+    fit_obj = dff.fit(main_label="test_sim", method="iekf",
+                      fit_config={
+                          "P0_diag": [1.0] * 10,
+                          "Q_diag": [1e-9] * 10,
+                          "R_val": None,
+                          })
+    results = dff.fits_df[fit_obj.label]
+
+    # Check the final converged values (last row of the results)
+    final_values = results.iloc[-1]
     assert final_values["amp"] == pytest.approx(basic_sim_config.laser.amp, rel=1e-4)
     assert final_values["m"] == pytest.approx(basic_sim_config.m, rel=1e-4)
     compare_angles(final_values["phi"], basic_sim_config.ifo.phi, atol=1e-4)
@@ -196,22 +222,20 @@ def test_ekf_tracks_slowly_varying_phase(basic_sim_config):
     Tests that the EKF can track a slowly changing phase signal.
     """
     dff = DeepFrame()
-
     n_seconds = 50e-3
-
-    # To test the EKF's tracking, we need to create a signal where the
-    # underlying phase (the ground truth) truly changes over time. We can
-    # achieve this by setting the armlength modulation parameters.
     basic_sim_config.ifo.arml_mod_f = 0.2  # Very slow 0.2 Hz sine wave motion
     # Amplitude of motion in meters, chosen to produce ~2 rad of phase swing
     wl = basic_sim_config.laser.wavelength
     basic_sim_config.ifo.arml_mod_amp = 2.0 * wl / (4 * np.pi)
 
     dff.add_sim(basic_sim_config)
-    # Use 'asd' mode to correctly generate the dynamic signal
     dff.simulate(label="test_sim", n_seconds=n_seconds, mode="asd", trial_num=123)
-
-    fit_obj = dff.fit(main_label="test_sim", method="ekf")
+    fit_obj = dff.fit(main_label="test_sim", method="ekf",
+                      fit_config={
+                          "P0_diag": [1.0] * 5,
+                          "Q_diag": [1e-6] * 5,
+                          "R_val": None,
+                          })
     results = dff.fits_df[fit_obj.label]
 
     # Manually calculate the downsampled ground truth
@@ -219,17 +243,50 @@ def test_ekf_tracks_slowly_varying_phase(basic_sim_config):
     n_cycles = fit_obj.n
     R, _, _ = _calculate_fit_params(raw_data, n_cycles)
     ground_truth_phi_downsamp = vectorized_downsample(raw_data.phi_sim, R)
-
     assert ground_truth_phi_downsamp is not None, "Downsampling of ground truth failed."
 
     # Check the RMS error between the tracked phase and the ground truth
     convergence_point = len(results) // 4
     tracked_phi = results["phi"].iloc[convergence_point:]
     true_phi = ground_truth_phi_downsamp[convergence_point:]
+    rms_error = np.sqrt(np.mean((tracked_phi - true_phi) ** 2))
 
-    # The EKF will have some lag, so we compare against a shifted ground truth
-    # A simple way to account for lag is to compare the shape and amplitude.
-    # A more robust test checks the RMS error.
+    # The EKF isn't perfect, so we expect some tracking error.
+    assert rms_error < 0.01
+
+
+def test_iekf_tracks_slowly_varying_phase(basic_sim_config):
+    """
+    Tests that the EKF can track a slowly changing phase signal.
+    """
+    dff = DeepFrame()
+    n_seconds = 50e-3
+    basic_sim_config.ifo.arml_mod_f = 0.2  # Very slow 0.2 Hz sine wave motion
+    # Amplitude of motion in meters, chosen to produce ~2 rad of phase swing
+    wl = basic_sim_config.laser.wavelength
+    basic_sim_config.ifo.arml_mod_amp = 2.0 * wl / (4 * np.pi)
+
+    dff.add_sim(basic_sim_config)
+    dff.simulate(label="test_sim", n_seconds=n_seconds, mode="asd", trial_num=123)
+    fit_obj = dff.fit(main_label="test_sim", method="iekf", 
+                      fit_config={
+                          "P0_diag": [1.0] * 10,
+                          "Q_diag": [1e-6] * 10,
+                          "R_val": None,
+                          })
+    results = dff.fits_df[fit_obj.label]
+
+    # Manually calculate the downsampled ground truth
+    raw_data = dff.raws["test_sim"]
+    n_cycles = fit_obj.n
+    R, _, _ = _calculate_fit_params(raw_data, n_cycles)
+    ground_truth_phi_downsamp = vectorized_downsample(raw_data.phi_sim, R)
+    assert ground_truth_phi_downsamp is not None, "Downsampling of ground truth failed."
+
+    # Check the RMS error between the tracked phase and the ground truth
+    convergence_point = len(results) // 4
+    tracked_phi = results["phi"].iloc[convergence_point:]
+    true_phi = ground_truth_phi_downsamp[convergence_point:]
     rms_error = np.sqrt(np.mean((tracked_phi - true_phi) ** 2))
 
     # The EKF isn't perfect, so we expect some tracking error.
