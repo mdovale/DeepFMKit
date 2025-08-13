@@ -136,7 +136,7 @@ def _ekf_core_loop(data, t_axis, w_m, R_downsample, nbuf,
     return x, results
 
 @jit(nopython=True)
-def _integrated_ekf_core_loop(data_ac, t_axis, w_m, dt, R_downsample, nbuf,
+def _integrated_ekf_core_loop(raw_data, t_axis, w_m, dt, R_downsample, nbuf,
                               x_init, P_init, Q, R_val):
     """
     Core JIT-compiled loop for the EKF with a constant velocity process model.
@@ -155,7 +155,8 @@ def _integrated_ekf_core_loop(data_ac, t_axis, w_m, dt, R_downsample, nbuf,
         - The results array populated at the downsampled rate.
     """
     # --- Initialization ---
-    dim_x = 8
+    # The state is 10D: [phi, phi_dot, psi, psi_dot, m, m_dot, c, c_dot, a, a_dot]
+    dim_x = 10
     x = x_init.copy()
     P = P_init.copy()
     R = np.array([[R_val]])
@@ -163,11 +164,11 @@ def _integrated_ekf_core_loop(data_ac, t_axis, w_m, dt, R_downsample, nbuf,
     # State transition matrix F for constant velocity model
     F_block = np.array([[1.0, dt], [0.0, 1.0]])
     F = np.zeros((dim_x, dim_x))
-    for i in range(dim_x // 2):
+    for i in range(dim_x // 2): # This correctly loops 5 times for the 5 blocks
         F[2*i:2*i+2, 2*i:2*i+2] = F_block
         
     results = np.zeros((nbuf, dim_x))
-    n_samp = len(data_ac)
+    n_samp = len(raw_data)
 
     # --- Main Loop ---
     for k in range(n_samp):
@@ -176,24 +177,25 @@ def _integrated_ekf_core_loop(data_ac, t_axis, w_m, dt, R_downsample, nbuf,
         P = F @ P @ F.T + Q
 
         # --- 2. UPDATE STEP ---
-        # Unpack state parameters (not rates) for measurement model
-        phi, _, psi, _, m, _, c, _ = x
+        # Unpack state parameters (not rates)
+        phi, _, psi, _, m, _, c, _, a, _ = x
         
-        # Measurement function h(x) - AC model only
+        # Measurement function h(x) - uses the full raw signal model
         theta = w_m * t_axis[k] + psi
         full_phase_arg = phi + m * np.cos(theta)
-        h_x = c * np.cos(full_phase_arg)
+        h_x = c * np.cos(full_phase_arg) + a
 
-        # Jacobian H (1x8 sparse matrix)
+        # Jacobian H (1x10 sparse matrix)
         sin_full_arg = np.sin(full_phase_arg)
         H = np.zeros((1, dim_x))
-        H[0, 0] = -c * sin_full_arg                    # d(h)/d(phi)
+        H[0, 0] = -c * sin_full_arg                  # d(h)/d(phi)
         H[0, 2] = c * m * sin_full_arg * np.sin(theta) # d(h)/d(psi)
-        H[0, 4] = -c * sin_full_arg * np.cos(theta)    # d(h)/d(m)
-        H[0, 6] = np.cos(full_phase_arg)               # d(h)/d(c)
+        H[0, 4] = -c * sin_full_arg * np.cos(theta)   # d(h)/d(m)
+        H[0, 6] = np.cos(full_phase_arg)             # d(h)/d(c) - AC amplitude
+        H[0, 8] = 1.0                                # d(h)/d(a) - DC offset
 
         # Innovation and Kalman Gain
-        y_k = data_ac[k] - h_x
+        y_k = raw_data[k] - h_x
         S = H @ P @ H.T + R
         K = (P @ H.T) @ np.linalg.inv(S)
 
@@ -498,8 +500,8 @@ class IntegratedEKFFitter(BaseFitter):
               Defaults to None.
         """
         super().__init__(fit_config)
-        self.P0_diag = self.config.get("P0_diag", [1.0] * 8)
-        self.Q_diag = self.config.get("Q_diag", [1e-10] * 8)
+        self.P0_diag = self.config.get("P0_diag", [1.0] * 10)
+        self.Q_diag = self.config.get("Q_diag", [1e-10] * 10)
         self.R_val = self.config.get("R_val", None)
 
     def fit(self, main_raw: RawData, **kwargs: Any) -> pd.DataFrame:
@@ -525,15 +527,14 @@ class IntegratedEKFFitter(BaseFitter):
         """
         # --- 0. Unpack Configuration and Data ---
         raw_data_np = main_raw.data["ch0"].to_numpy()
-        data_dc = np.mean(raw_data_np)
-        data_ac = raw_data_np - data_dc # Use AC-coupled data
         verbose = kwargs.get("verbose", True)
         
         # Initial guesses for the state (rates default to 0.0)
         init_phi = kwargs.get("init_phi", DEFAULT_GUESS["phi"])
         init_psi = kwargs.get("init_psi", DEFAULT_GUESS["psi"])
         init_m = kwargs.get("init_m", DEFAULT_GUESS["m"])
-        init_c = kwargs.get("init_c", np.std(data_ac) * np.sqrt(2)) # Robust AC amplitude guess
+        init_a = kwargs.get("init_a", np.mean(raw_data_np)) # DC offset guess
+        init_c = kwargs.get("init_c", np.std(raw_data_np) * np.sqrt(2)) # AC amplitude guess
 
         # --- 1. Prepare Inputs for JIT-Compiled Function ---
         x_init = np.array([
@@ -541,18 +542,19 @@ class IntegratedEKFFitter(BaseFitter):
             init_psi, 0.0,  # psi, psi_dot
             init_m,   0.0,  # m, m_dot
             init_c,   0.0,  # c, c_dot
+            init_a,   0.0,  # a, a_dot
         ], dtype=np.float64)
         
         P_init = np.diag(self.P0_diag).astype(np.float64)
         Q = np.diag(self.Q_diag).astype(np.float64)
 
         if self.R_val is None:
-            R_val_actual = np.var(data_ac)
-            logging.debug(f"IntegratedEKF R_val estimated from AC data variance: {R_val_actual:.4g}")
+            R_val_actual = np.var(raw_data_np)
+            logging.debug(f"IntegratedEKF R_val estimated from raw data variance: {R_val_actual:.4g}")
         else:
             R_val_actual = self.R_val
         
-        n_samp = len(data_ac)
+        n_samp = len(raw_data_np)
         dt = 1 / main_raw.f_samp
         w_m = 2 * np.pi * main_raw.fm
         t_axis = np.arange(n_samp) * dt
@@ -560,12 +562,12 @@ class IntegratedEKFFitter(BaseFitter):
         R_downsample, _, nbuf = _calculate_fit_params(main_raw, self.config["n"])
 
         # --- 2. Call the High-Performance Core Loop ---
-        logging.info(f"Running JIT-compiled Integrated EKF for {n_samp} samples...")
+        logging.info(f"Running JIT-compiled 10D Integrated EKF for {n_samp} samples...")
         if verbose:
             print("Numba JIT compilation may take a moment on the first run...")
 
-        _, results = _integrated_ekf_core_loop(
-            data_ac, t_axis, w_m, dt, R_downsample, nbuf,
+        _, results = _integrated_ekf_core_loop( 
+            raw_data_np, t_axis, w_m, dt, R_downsample, nbuf,
             x_init, P_init, Q, R_val_actual
         )
         
@@ -573,11 +575,13 @@ class IntegratedEKFFitter(BaseFitter):
 
         # --- 3. Create and return results DataFrame ---
         df_dict = {
-            "amp": results[:, 6], "dc": data_dc,
             "phi": results[:, 0], "phi_dot": results[:, 1],
             "psi": results[:, 2], "psi_dot": results[:, 3],
             "m":   results[:, 4], "m_dot": results[:, 5],
-            "c":   results[:, 6], "c_dot": results[:, 7],
+            "c":   results[:, 6], "c_dot": results[:, 7], # AC amplitude and its rate
+            "dc":  results[:, 8], "dc_dot":  results[:, 9], # DC offset and its rate
+            "amp": results[:, 6],
+            
             "ssq": np.zeros(nbuf),
             "fitok": np.ones(nbuf, dtype=int),
         }
