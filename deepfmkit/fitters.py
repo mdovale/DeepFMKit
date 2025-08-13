@@ -239,15 +239,15 @@ def _process_fit_chunk(args: tuple) -> List[Dict[str, Any]]:
         A list of dictionaries, where each dictionary holds the fit result
         for a single buffer in the chunk.
     """
-    # 1. Unpack arguments
-    raw_data_chunk, initial_guess_active, R, ndata, fm, f_samp, fit_params = args
+    # Unpack arguments
+    raw_data_chunk, initial_guess_active, R, ndata, fm, f_samp, fit_params, skip_dc = args
 
-    # 2. Setup
+    # Setup
     results_list = []
     current_guess_active = np.array(initial_guess_active)
     w0 = 2.0 * np.pi * fm / f_samp
 
-    # 3. Process the chunk sequentially
+    # Process the chunk sequentially
     for i in range(raw_data_chunk.shape[0]):
         buffer_data = raw_data_chunk[i]
 
@@ -266,16 +266,23 @@ def _process_fit_chunk(args: tuple) -> List[Dict[str, Any]]:
         current_guess_dict = {name: val for name, val in zip(ALL_PARAMS, fit_parm_full)}
         current_guess_active = [current_guess_dict[p_name] for p_name in fit_params]
 
+        # DC offset calculation
+        if not skip_dc:
+            dc_offset = mean_filter(buffer_data, method="bessel", 
+                              C=fit_parm_full[0], 
+                              m=fit_parm_full[1], 
+                              phi=fit_parm_full[2])
+        else:
+            dc_offset = 0.0
+
+        # Pack results
         results_list.append(
             {
                 "amp": fit_parm_full[0],
                 "m": fit_parm_full[1],
                 "phi": fit_parm_full[2],
                 "psi": fit_parm_full[3],
-                "dc": mean_filter(buffer_data, method="bessel", 
-                                C=fit_parm_full[0], 
-                                m=fit_parm_full[1], 
-                                phi=fit_parm_full[2]),
+                "dc": dc_offset,
                 "ssq": fit_ssq,
                 "fitok": status,
             }
@@ -699,7 +706,7 @@ class StandardNLSFitter(BaseFitter):
             )
         else:
             return self._fit_sequential(
-                main_raw, R, nbuf, self.ndata, initial_guess_active, self.fit_params
+                main_raw, R, nbuf, self.ndata, initial_guess_active, self.fit_params, **kwargs
             )
 
     def _fit_sequential(
@@ -710,11 +717,13 @@ class StandardNLSFitter(BaseFitter):
         ndata: int,
         initial_guess_active: List[float],
         fit_params: List[str],
+        **kwargs: Any,
     ) -> pd.DataFrame:
         """Executes the fit sequentially, one buffer at a time."""
         logging.debug(
             f"Processing '{main_raw.label}' sequentially with fit_params={fit_params}..."
         )
+        skip_dc = kwargs.get("skip_dc", False)
 
         # Start with the optimized initial guess.
         current_guess_active = np.array(initial_guess_active)
@@ -734,6 +743,7 @@ class StandardNLSFitter(BaseFitter):
                 ndata,
                 current_guess_active,
                 fit_params,
+                skip_dc,
             )
             results_list.append(result_dict)
 
@@ -758,6 +768,8 @@ class StandardNLSFitter(BaseFitter):
         """Executes the fit in parallel across multiple cores."""
         n_cores = kwargs.get("n_cores", os.cpu_count())
         n_cores = min(n_cores, nbuf - 1 if nbuf > 1 else 1)
+        skip_dc = kwargs.get("skip_dc", False)
+
         logging.debug(
             f"Processing '{main_raw.label}' in parallel with fit_params={fit_params}..."
         )
@@ -774,6 +786,7 @@ class StandardNLSFitter(BaseFitter):
             ndata,
             initial_guess_active,
             fit_params,
+            skip_dc,
         )
 
         # Create the warm-start guess for all other parallel workers.
@@ -800,6 +813,7 @@ class StandardNLSFitter(BaseFitter):
                 main_raw.fm,
                 main_raw.f_samp,
                 fit_params,
+                skip_dc,
             )
             for chunk in chunks
             if chunk.size > 0
@@ -829,6 +843,7 @@ class StandardNLSFitter(BaseFitter):
         ndata: int,
         initial_guess_active: np.ndarray,
         fit_params: List[str],
+        skip_dc: bool = False
     ) -> Dict[str, Any]:
         """Processes a single buffer of raw data to produce one fit result.
 
@@ -847,16 +862,22 @@ class StandardNLSFitter(BaseFitter):
             ndata, QI_data_mean, initial_guess_active, fit_params
         )
 
+        # DC offset calculation.
+        if not skip_dc:
+            dc_offset = mean_filter(raw_buffer, method="bessel", 
+                              C=fit_parm_full[0], 
+                              m=fit_parm_full[1], 
+                              phi=fit_parm_full[2])
+        else:
+            dc_offset = 0.0
+
         # Package the full 4-parameter result into a dictionary.
         return {
             "amp": fit_parm_full[0],
             "m": fit_parm_full[1],
             "phi": fit_parm_full[2],
             "psi": fit_parm_full[3],
-            "dc": mean_filter(raw_buffer, method="bessel", 
-                              C=fit_parm_full[0], 
-                              m=fit_parm_full[1], 
-                              phi=fit_parm_full[2]),
+            "dc": dc_offset,
             "ssq": fit_ssq,
             "fitok": status,
         }
