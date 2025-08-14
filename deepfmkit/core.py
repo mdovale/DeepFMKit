@@ -537,9 +537,15 @@ class DeepFrame:
             if col in df.columns:
                 setattr(fit, col, df[col].to_numpy())
 
-        # fit.time = np.arange(0, fit.ssq.shape[0] / fit.fs, 1.0 / fit.fs)
+        # Assemble time axis for the readout data
         fit.time = np.arange(fit.ssq.shape[0]) / fit.fs
-        fit.time = fit.time + (fit.time[1] - fit.time[0])
+
+        try:
+            # t0 is the time after the first data buffer is processed
+            fit.time = fit.time + (fit.time[1] - fit.time[0])
+        except IndexError:
+            pass
+
         fit.label = fit_label
 
         self.fits[fit_label] = fit
