@@ -400,7 +400,7 @@ class LaserConfig:
             dummy_dfmi_channel, n_total_samples_plot, trial_num=noise_seed
         )
         
-        witness_freq, witness_phase, _ = sg._run_physics_simulation(
+        witness_freq, witness_phase, _, _ = sg._run_physics_simulation(
             dummy_dfmi_channel,
             time_axis,
             noise_arrays,
@@ -840,7 +840,7 @@ class SignalGenerator:
             is_dynamic=True,
             timeshift_order=timeshift_order,
         )
-        dfmi_signal_padded, dfmi_phase_padded, ground_truth_padded = main_outputs
+        dfmi_signal_padded, dfmi_phase_padded, ground_truth_padded, noisy_ground_truth_padded = main_outputs
         if verbose:
             pbar.update(1)
 
@@ -857,6 +857,7 @@ class SignalGenerator:
         dfmi_signal = dfmi_signal_padded[valid_slice]
         dfmi_phase = dfmi_phase_padded[valid_slice]
         simulated_phase_ground_truth = ground_truth_padded[valid_slice]
+        noisy_simulated_phase_ground_truth = noisy_ground_truth_padded[valid_slice]
 
         # Final sanity check on the output length.
         assert len(dfmi_signal) == num_final_samples, "Cropped signal length mismatch."
@@ -874,6 +875,7 @@ class SignalGenerator:
         # Store all ground truth and noise signals (also cropped).
         raw_main.phi = dfmi_phase
         raw_main.phi_sim = simulated_phase_ground_truth
+        raw_main.phi_sim_noisy = noisy_simulated_phase_ground_truth
 
         def safe_slice(value, slc):
             return value[slc] if isinstance(value, np.ndarray) else value
@@ -900,7 +902,7 @@ class SignalGenerator:
                 is_witness=True,
                 timeshift_order=timeshift_order,
             )
-            witness_signal_padded, witness_phase_padded, witness_gt_padded = (
+            witness_signal_padded, witness_phase_padded, witness_gt_padded, witness_gt_padded_noisy = (
                 witness_outputs
             )
 
@@ -915,6 +917,7 @@ class SignalGenerator:
             raw_witness.sim = witness_config
             raw_witness.phi = witness_phase_padded[valid_slice]
             raw_witness.phi_sim = witness_gt_padded[valid_slice]
+            raw_witness.phi_sim_noisy = witness_gt_padded_noisy[valid_slice]
             raw_witness.f_noise = safe_slice(
                 noise.get("laser_frequency", 0.0), valid_slice
             )
@@ -1404,14 +1407,15 @@ class SignalGenerator:
             static_opd_roundtrip = ifo.meas_arml - ifo.ref_arml
             phase_noise_from_laser = 2 * np.pi * f_noise * static_opd_roundtrip / sc.c
 
-        # Sum all phase components
-        dfmi_phase = (
-            ifo.phi  # Static phase offset
-            + dynamic_carrier_phase_signal  # Direct phase from arm motion
-            + delta_phi_mod  # Differential phase from laser's own FM
-            + phase_noise_from_laser  # Phase noise from laser frequency jitter
-        )
+        # Sum all phase components:
+        # 1. Static phase offset + direct phase from arm motion
+        simulated_phase_ground_truth = ifo.phi + dynamic_carrier_phase_signal
+        # 2. + Residual differential laser phase noise
+        simulated_noisy_phase_ground_truth = simulated_phase_ground_truth + phase_noise_from_laser
+        # 3. + Differential phase from laser's own FM
+        dfmi_phase = simulated_noisy_phase_ground_truth + delta_phi_mod
 
+        # Assemble final signal:
         amplitude_effective = laser.amp*(1 + noise_arrays.get("laser_rin", 0.0))
 
         voltage_signal = amplitude_effective * (
@@ -1422,9 +1426,4 @@ class SignalGenerator:
         else:
             voltage_signal += noise_arrays.get("electronic", 0.0)
 
-        if is_dynamic:
-            simulated_phase_ground_truth = ifo.phi + dynamic_carrier_phase_signal
-        else:
-            simulated_phase_ground_truth = np.full_like(time_axis, ifo.phi)
-
-        return voltage_signal, dfmi_phase, simulated_phase_ground_truth
+        return voltage_signal, dfmi_phase, simulated_phase_ground_truth, simulated_noisy_phase_ground_truth

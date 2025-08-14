@@ -112,9 +112,11 @@ class RawData:
     sim : SimConfig, optional
         A link to the `SimConfig` object used to generate this data.
     phi : np.ndarray, optional
-        The total, noisy interferometric phase from a simulation.
+        Full DFMI phase from dynamic simulations, incl. all laser terms.
     phi_sim : np.ndarray, optional
-        The ideal, noiseless phase signal from a simulation (the ground truth).
+        The ideal, noiseless phase signal from a dynamic simulation (noiseless ground truth).
+    phi_sim_noisy : np.ndarray, optional
+        The noisy phase signal from a dynamic simulation (noisy ground truth).
     phi_sim_downsamp : np.ndarray, optional
         The ground truth phase signal, downsampled to the fit rate.
     f_noise : np.ndarray, optional
@@ -139,10 +141,13 @@ class RawData:
     # Simulation outputs:
     sim: Optional[Any] = None  # Associated SimConfig
     phi: Optional[np.array] = (
-        None  # IFO phase from dynamic simulations, incl. laser frequency noise
+        None  # Full DFMI phase from dynamic simulations, incl. all laser terms
     )
     phi_sim: Optional[np.array] = (
         None  # IFO phase from dynamic simulations, not incl. laser frequency noise
+    )
+    phi_sim_noisy: Optional[np.array] = (
+        None  # IFO phase from dynamic simulations, incl. laser frequency noise
     )
     phi_sim_downsamp: Optional[np.array] = None  # phi_sim downsampled
     f_noise: Optional[np.array] = None  # Laser frequency noise
