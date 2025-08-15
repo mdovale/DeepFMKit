@@ -209,7 +209,7 @@ my_factory_instance = VairableAmplitudeOffset(
 # Create an Experiment object.
 experiment = Experiment(description="Example using VairableAmplitudeOffset factory")
 experiment.set_config_factory(my_factory_instance)
-experiment.n_fit_buffers_per_trial = 200
+experiment.n_cycles = 200
 experiment.f_samp = 200e3
 
 # Define sweep axis: the nominal signal amplitude.
@@ -241,7 +241,7 @@ experiment.add_analysis(
     result_cols=['amp', 'm', 'phi', 'psi', 'ssq'], # Parameters I want to collect
     fitter_kwargs={
         'n': 20,       # 20 modulation cycles per fit buffer
-        'ndata': 10,   # Use this many harmonics for NLS
+        'n_harmonics': 10,   # Use this many harmonics for NLS
     }
 )
 

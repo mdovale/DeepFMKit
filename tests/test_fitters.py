@@ -148,7 +148,7 @@ def test_nls_fitter_psi_init(basic_sim_config):
         fit_label="fit_smart",
         init_psi=bad_psi_guess,
         init_psi_method="scan",
-        parallel=False,
+        parallel=True,
     )
     results_smart = dff.fits_df[fit_smart_guess.label]
 
@@ -240,7 +240,7 @@ def test_ekf_tracks_slowly_varying_phase(basic_sim_config):
 
     # Manually calculate the downsampled ground truth
     raw_data = dff.raws["test_sim"]
-    n_cycles = fit_obj.n
+    n_cycles = fit_obj.n_cycles
     R, _, _ = _calculate_fit_params(raw_data, n_cycles)
     ground_truth_phi_downsamp = vectorized_downsample(raw_data.phi_sim, R)
     assert ground_truth_phi_downsamp is not None, "Downsampling of ground truth failed."
@@ -278,7 +278,7 @@ def test_iekf_tracks_slowly_varying_phase(basic_sim_config):
 
     # Manually calculate the downsampled ground truth
     raw_data = dff.raws["test_sim"]
-    n_cycles = fit_obj.n
+    n_cycles = fit_obj.n_cycles
     R, _, _ = _calculate_fit_params(raw_data, n_cycles)
     ground_truth_phi_downsamp = vectorized_downsample(raw_data.phi_sim, R)
     assert ground_truth_phi_downsamp is not None, "Downsampling of ground truth failed."

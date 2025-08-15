@@ -93,7 +93,7 @@ def _run_single_trial(job_packet: Tuple) -> Dict[str, Any]:
           generate physics objects from `trial_params`.
         - analyses_to_run (list[dict]): A list of analysis configurations to
           be performed on the simulated data.
-        - n_fit_cycles (int): The number of modulation cycles (`n`) to simulate
+        - n_cycles (int): The number of modulation cycles (`n`) to simulate
           and use for the fit in this trial.
         - f_samp (float): The sampling frequency in Hz.
         - trial_num (int): A unique seed for this trial's noise generation,
@@ -110,7 +110,7 @@ def _run_single_trial(job_packet: Tuple) -> Dict[str, Any]:
         trial_params,
         config_factory,
         analyses_to_run,
-        num_fit_buffers,
+        n_cycles,
         f_samp,
         trial_num,
     ) = job_packet
@@ -123,7 +123,7 @@ def _run_single_trial(job_packet: Tuple) -> Dict[str, Any]:
     R = int(f_samp / laser_config.fm)
 
     # Calculate the total number of raw samples needed for this trial.
-    num_samples_needed = num_fit_buffers * R
+    num_samples_needed = n_cycles * R
     if num_samples_needed == 0:
         # Handle edge case where calculated samples needed is zero
         logging.warning(
@@ -191,7 +191,7 @@ def _run_single_trial(job_packet: Tuple) -> Dict[str, Any]:
         if analysis["fitter_method"] in ["nls", "ekf"]:
             fitter_args["parallel"] = False
 
-        fitter_args["n"] = num_fit_buffers
+        fitter_args["n_cycles"] = n_cycles
         fitter_args["init_a"] = main_channel_sim.laser.amp
         fitter_args["init_phi"] = main_channel_sim.ifo.phi
         fitter_args["init_psi"] = main_channel_sim.laser.psi
@@ -243,8 +243,8 @@ class Experiment:
         A list of analysis configurations to be run on each trial's data.
     n_trials : int
         The number of Monte Carlo trials to run for each point on the grid of axes.
-    n_fit_cycles_per_trial : int
-        The number of modulation cycles `n` to simulate and use for fitting
+    n_cycles : int
+        The number of modulation cycles to simulate and use for fitting
         in each individual trial.
     f_samp : float
         The sampling frequency (Hz) for all simulations in the experiment.
@@ -270,7 +270,7 @@ class Experiment:
         )  # Store expected parameters for validation
         self.analyses: List[Dict[str, Any]] = []
         self.n_trials: int = 1
-        self.n_fit_buffers_per_trial: int = 10
+        self.n_cycles: int = 10
         self.f_samp: int = 200000
         self.results: Optional[Dict[str, Any]] = (
             None  # To store aggregated results after run()
@@ -627,7 +627,7 @@ class Experiment:
                         trial_params_for_factory,
                         self.config_factory,
                         self.analyses,
-                        self.n_fit_buffers_per_trial,
+                        self.n_cycles,
                         self.f_samp,
                         trial_counter,
                     )

@@ -105,13 +105,13 @@ class DeepFrame:
         self.fits: Dict[str, FitData] = {}
         self.fits_df: Dict[str, pd.DataFrame] = {}
         self.channr: Optional[int] = None
-        self.n: Optional[int] = None
+        self.n_cycles: Optional[int] = None
         self.t0: Optional[int] = None
         self.R: Optional[int] = None
         self.fs: Optional[float] = None
         self.f_samp: Optional[float] = None
         self.fm: Optional[float] = None
-        self.ndata: int = 10
+        self.n_harmonics: int = 10
         self.init_a: float = 1.6
         self.init_m: float = 6.0
 
@@ -207,14 +207,14 @@ class DeepFrame:
             self.t0 = int(values[1])
             self.f_samp = float(values[2])
             self.fm = float(values[3])
-            self.n = int(values[4])
+            self.n_cycles = int(values[4])
             self.R = int(values[5])
             self.fs = float(values[6])
             logging.info("Number of channels: {}".format(self.channr))
             logging.info("Starting time: {}".format(self.t0))
             logging.info("Sampling frequency: {}".format(self.f_samp))
             logging.info("Modulation frequency: {}".format(self.fm))
-            logging.info("n: {}".format(self.n))
+            logging.info("Cycles per buffer: {}".format(self.n_cycles))
             logging.info("Downsampling factor: {}".format(self.R))
             logging.info("Fit data rate: {}".format(self.fs))
 
@@ -440,21 +440,21 @@ class DeepFrame:
 
         for k in range(self.channr):
             fit = FitData()
-            fit.nbuf = len(data[:, 0])
-            fit.n = self.n
+            fit.n_buf = len(data[:, 0])
+            fit.n_cycles = self.n_cycles
             fit.t0 = self.t0
             fit.R = self.R
             fit.fs = self.fs
             fit.f_samp = self.f_samp
             fit.fm = self.fm
-            fit.ndata = self.ndata
+            fit.n_harmonics = self.n_harmonics
             fit.ssq = data[:, 6 * k + 0]
             fit.amp = data[:, 6 * k + 1]
             fit.m = data[:, 6 * k + 2]
             fit.phi = data[:, 6 * k + 3]
             fit.psi = data[:, 6 * k + 4]
             fit.dc = data[:, 6 * k + 5]
-            fit.time = np.arange(0, fit.nbuf / self.fs, 1.0 / self.fs)
+            fit.time = np.arange(0, fit.n_buf / self.fs, 1.0 / self.fs)
             fit.label = labels[k]
             self.fits[labels[k]] = fit
 
@@ -462,11 +462,11 @@ class DeepFrame:
         self,
         fit_label: str,
         source_label: str,
-        n: int,
+        n_cycles: int,
         R: int,
         fs: float,
-        nbuf: int,
-        ndata: int,
+        n_buf: int,
+        n_harmonics: int,
         init_a: float,
         init_m: float,
         init_phi: float,
@@ -485,15 +485,15 @@ class DeepFrame:
             The label for the new FitData and the key for `self.fits`.
         source_label : str
             The label of the source RawData in `self.raws`.
-        n : int
+        n_cycles : int
             Number of modulation cycles per fit buffer.
         R : int
             Buffer size in samples (downsampling factor).
         fs : float
             Fit data rate in Hz.
-        nbuf : int
+        n_buf : int
             Total number of buffers in the fit.
-        ndata : int
+        n_harmonics : int
             Number of harmonics used in the fit.
         init_a : float
             Initial amplitude guess used for the fit.
@@ -508,12 +508,12 @@ class DeepFrame:
         df = self.fits_df[fit_label]
 
         fit = FitData()
-        fit.n, fit.R, fit.fs, fit.nbuf, fit.ndata, fit.init_a, fit.init_m, fit.init_phi, fit.init_psi = (
-            n,
+        fit.n_cycles, fit.R, fit.fs, fit.n_buf, fit.n_harmonics, fit.init_a, fit.init_m, fit.init_phi, fit.init_psi = (
+            n_cycles,
             R,
             fs,
-            nbuf,
-            ndata,
+            n_buf,
+            n_harmonics,
             init_a,
             init_m,
             init_phi,
@@ -551,7 +551,7 @@ class DeepFrame:
         self.fits[fit_label] = fit
         return fit
 
-    def _fit_init(self, label: str, n: int) -> tuple[int, float, int]:
+    def _fit_init(self, label: str, n_cycles: int) -> tuple[int, float, int]:
         """Calculates key parameters for a fitting run.
 
         Based on the number of modulation cycles `n` to include in each fit
@@ -562,33 +562,33 @@ class DeepFrame:
         ----------
         label : str
             The label of the source RawData in `self.raws`.
-        n : int
+        n_cycles : int
             The number of modulation periods (`fm`) to include in each
             analysis buffer.
 
         Returns
         -------
         tuple[int, float, int]
-            A tuple containing (R, fs, nbuf):
+            A tuple containing (R, fs, n_buf):
             - R: The buffer size in samples.
             - fs: The resulting fit data rate in Hz.
-            - nbuf: The total number of full buffers available in the data.
+            - n_buf: The total number of full buffers available in the data.
 
         Raises
         ------
         ValueError
             If the calculated number of buffers is zero.
         """
-        R = int(self.raws[label].f_samp / self.raws[label].fm * n)
+        R = int(self.raws[label].f_samp / self.raws[label].fm * n_cycles)
         fs = self.raws[label].f_samp / R
-        nbuf = int(self.raws[label].data.shape[0] / R)
-        if nbuf == 0:
+        n_buf = int(self.raws[label].data.shape[0] / R)
+        if n_buf == 0:
             raise ValueError(
                 f"Buffer configuration for '{label}' results in 0 buffers. "
-                "The data is too short for the requested `n` value."
+                "The data is too short for the requested `n_cyles` value."
             )
 
-        return R, fs, nbuf
+        return R, fs, n_buf
 
     def fit(
         self,
@@ -664,15 +664,15 @@ class DeepFrame:
         if fit_label is None:
             fit_label = f"{main_label}_{method}"
 
-        # Get 'n' for the fit config, which is common to all fitters
-        n_cycles = kwargs.pop("n", None) # Use pop to remove it from kwargs
+        # Get 'n_cycles' for the fit config, which is common to all fitters
+        n_cycles = kwargs.pop("n_cycles", None) # Use pop to remove it from kwargs
         if n_cycles is None:
             sim_obj = self.sims.get(main_raw.sim.label if main_raw.sim else main_label)
             n_cycles = sim_obj.fit_n if sim_obj else 20
 
         # --- 3. Build the Fitter Configuration Dictionary ---
         # Start with the base config common to all fitters
-        config_for_fitter = {"n": n_cycles}
+        config_for_fitter = {"n_cycles": n_cycles}
 
         # The new, recommended way: update from the fit_config dictionary
         if fit_config is not None:
@@ -680,7 +680,7 @@ class DeepFrame:
 
         # Legacy support: also check for constructor args in kwargs
         # A parameter in `fit_config` will take precedence over one in `kwargs`.
-        fitter_constructor_keys = ["P0_diag", "Q_diag", "R_val", "ndata", "fit_params", "init_psi_method"]
+        fitter_constructor_keys = ["P0_diag", "Q_diag", "R_val", "n_harmonics", "fit_params", "init_psi_method"]
         for key in fitter_constructor_keys:
             if key in kwargs and key not in config_for_fitter:
                 config_for_fitter[key] = kwargs.pop(key)
@@ -688,7 +688,7 @@ class DeepFrame:
         # --- 4. Instantiate and run the Fitter ---
         fitter = FitterClass(config_for_fitter)
         
-        R, fs, nbuf = self._fit_init(main_label, n_cycles)
+        R, fs, n_buf = self._fit_init(main_label, n_cycles)
         if (
             hasattr(main_raw, "phi_sim")
             and main_raw.phi_sim is not None
@@ -721,8 +721,8 @@ class DeepFrame:
             n_cycles,
             R,
             fs,
-            nbuf,
-            config_for_fitter.get("ndata", DEFAULT_NDATA),
+            n_buf,
+            config_for_fitter.get("n_harmonics", DEFAULT_NDATA),
             kwargs.get("init_a", DEFAULT_GUESS["amp"]),
             kwargs.get("init_m", DEFAULT_GUESS["m"]),
             kwargs.get("init_phi", DEFAULT_GUESS["phi"]),

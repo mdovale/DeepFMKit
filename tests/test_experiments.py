@@ -252,7 +252,7 @@ def test_experiment_full_integration_with_golden_file():
         name="NLS_Fit",
         fitter_method="nls",
         result_cols=["m"],
-        fitter_kwargs={"ndata": 30},
+        fitter_kwargs={"n_harmonics": 30},
     )
 
     # --- 3. Run the experiment again ---

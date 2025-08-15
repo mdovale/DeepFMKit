@@ -308,7 +308,7 @@ class FitData:
         The path to the source file if loaded from disk.
     label : str, optional
         A unique identifier for this fit result.
-    n : int, optional
+    n_cycles : int, optional
         The number of modulation cycles per fit buffer.
     t0 : int, optional
         The start time of the original data.
@@ -320,11 +320,11 @@ class FitData:
         The sampling frequency of the original raw data in Hz.
     fm : float, optional
         The laser modulation frequency in Hz.
-    ndata : int
+    n_harmonics : int
         The number of harmonics used in the NLS fit.
     init_a, init_m, init_phi, init_psi : float
         The initial parameter guesses used for the fit.
-    nbuf : int, optional
+    n_buf : int, optional
         The total number of buffers (fit points) in the result.
     time : np.ndarray, optional
         The time axis for the fitted parameters.
@@ -346,20 +346,20 @@ class FitData:
 
     fit_file: Optional[str] = None  # The fit data file
     label: Optional[str] = None  # Label of the data
-    n: Optional[int] = (
-        None  # buffer_size = n*f_samp/fm; data_rate = f_samp/buffer_size = fm/n;
+    n_cycles: Optional[int] = (
+        None  # buffer_size = n_cycles*f_samp/fm; data_rate = f_samp/buffer_size = fm/n_cycles;
     )
     t0: Optional[int] = None  # Start time
     R: Optional[int] = None  # Downsampling factor
     fs: Optional[float] = None  # Fit data rate
     f_samp: Optional[float] = None  # Sampling frequency
     fm: Optional[float] = None  # Modulation frequency
-    ndata: int = DEFAULT_NDATA  # Number of harmonics to use in fit
+    n_harmonics: int = DEFAULT_NDATA  # Number of harmonics to use in fit
     init_a: float = DEFAULT_GUESS["amp"]  # Initial value of the amplitude
     init_m: float = DEFAULT_GUESS["m"]  # Initial value of the effective modulation index
     init_phi: float = DEFAULT_GUESS["phi"]  # Initial value of the interferometric phase
     init_psi: float = DEFAULT_GUESS["psi"]  # Initial value of the modulation phase
-    nbuf: Optional[int] = None  # Buffers contained in raw data
+    n_buf: Optional[int] = None  # Buffers contained in raw data
     time: Optional[np.ndarray] = None  # Fit time
     ssq: Optional[np.ndarray] = None  # Fit sum of squares
     amp: Optional[np.ndarray] = None  # Fit amplitude
@@ -374,14 +374,14 @@ class FitData:
         logging.info(f"""
 FitData Summary for: '{self.label}'
 -----------------------------------
-Source File:            {self.fit_file or "N/A (Generated)"}
-Start Time (t0):        {self.t0}
-Orig Samp Freq:         {self.f_samp:.3f} Hz
-Modulation Freq (fm):   {self.fm:.3f} Hz
-Fit Cycles (n):         {self.n:d}
-Downsampling (R):       {self.R:d}
-Fit Data Rate (fs):     {self.fs:.3f} Hz
-Number of Fit Points:   {self.nbuf:d}
+Source File:                  {self.fit_file or "N/A (Generated)"}
+Start Time (t0):              {self.t0}
+Orig Samp Freq:               {self.f_samp:.3f} Hz
+Modulation Freq (fm):         {self.fm:.3f} Hz
+Cycles per Buffer (n_cycles): {self.n_cycles:d}
+Downsampling (R):             {self.R:d}
+Fit Data Rate (fs):           {self.fs:.3f} Hz
+Number of Fit Points:         {self.n_buf:d}
 """)
 
     def to_txt(self, filename: str, *, compress: bool | None = None, encoding: str = "utf-8") -> str:
@@ -409,7 +409,7 @@ Number of Fit Points:   {self.nbuf:d}
             f"% Start time: {self.t0}",
             f"% Sampling frequency: {self.f_samp}",
             f"% Modulation frequency: {self.fm}",
-            f"% n: {int(self.n)}",
+            f"% Modulation cycles per fit buffer: {int(self.n_cycles)}",
             f"% Downsampling factor: {int(self.R)}",
             f"% Fit data rate: {self.fs}",
             "%",
@@ -451,7 +451,7 @@ Number of Fit Points:   {self.nbuf:d}
         self.t0 = int(values[0])
         self.f_samp = float(values[1])
         self.fm = float(values[2])
-        self.n = int(values[3])
+        self.n_cycles = int(values[3])
         self.R = int(values[4])
         self.fs = float(values[5])
 

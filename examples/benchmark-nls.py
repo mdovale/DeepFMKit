@@ -115,7 +115,7 @@ if __name__ == "__main__":
     F_SAMP = 200e3
     FM = 1e3
     N_CYCLES_PER_BUFFER = 20  # This is the 'n' parameter
-    N_HARMONICS = 30          # This is the 'ndata' parameter
+    N_HARMONICS = 30          # This is the 'n_harmonics' parameter
     N_REPETITIONS = 5         # Number of times to run each test for stable timing
 
     # --- Derived Parameters ---
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     print(f"Benchmark Configuration:")
     print(f"  - Total Data Duration: {N_SECONDS}s")
     print(f"  - Cycles per Fit (n): {N_CYCLES_PER_BUFFER}")
-    print(f"  - Harmonics per Fit (ndata): {N_HARMONICS}")
+    print(f"  - Harmonics per Fit (n_harmonics): {N_HARMONICS}")
     print(f"  - Total Number of Fits to Perform: {n_fits}")
     print("-" * 40)
     
@@ -139,7 +139,7 @@ if __name__ == "__main__":
         main_label=data_label,
         method='nls',
         n=N_CYCLES_PER_BUFFER,
-        ndata=N_HARMONICS,
+        n_harmonics=N_HARMONICS,
         parallel=False  # Explicitly disable parallelism
     )
     seq_time = run_timing(seq_fit_func, repetitions=N_REPETITIONS)
@@ -152,7 +152,7 @@ if __name__ == "__main__":
         main_label=data_label,
         method='nls',
         n=N_CYCLES_PER_BUFFER,
-        ndata=N_HARMONICS,
+        n_harmonics=N_HARMONICS,
         parallel=True,  # Enable parallelism
         n_cores=n_cores
     )

@@ -77,7 +77,7 @@ def generate():
         name="NLS_Fit",
         fitter_method="nls",
         result_cols=["m"],
-        fitter_kwargs={"ndata": 30},
+        fitter_kwargs={"n_harmonics": 30},
     )
 
     print(f"Starting experiment: '{experiment.description}'...")

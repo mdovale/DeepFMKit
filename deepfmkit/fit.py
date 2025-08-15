@@ -130,7 +130,7 @@ def calculate_quadratures(
 
 
 def ssq_jac_grad(
-    ndata: int, data: np.ndarray, param: np.ndarray, fit_params: List[str] = ALL_PARAMS
+    n_harmonics: int, data: np.ndarray, param: np.ndarray, fit_params: List[str] = ALL_PARAMS
 ) -> Tuple[float, np.ndarray, np.ndarray]:
     """Calculates the SSQ, Jacobian (J^T*J), and gradient (J^T*r).
 
@@ -141,10 +141,10 @@ def ssq_jac_grad(
 
     Parameters
     ----------
-    ndata : int
+    n_harmonics : int
         Number of harmonics to use in the fit.
     data : np.ndarray
-        A 1D array of size `2*ndata` containing the measured I/Q values
+        A 1D array of size `2*n_harmonics` containing the measured I/Q values
         ([Q1..QN, I1..IN]).
     param : np.ndarray
         A vector containing the current guess for the parameters being
@@ -175,7 +175,7 @@ def ssq_jac_grad(
     )
 
     # --- 1. Prepare harmonic-dependent arrays ---
-    j = np.arange(1, ndata + 1)  # Harmonic orders: [1, 2, ..., ndata]
+    j = np.arange(1, n_harmonics + 1)  # Harmonic orders: [1, 2, ..., n_harmonics]
 
     # This term, cos(phi + j*pi/2), is the core of the model's structure.
     # It correctly captures the alternating sin/cos and sign changes.
@@ -196,33 +196,33 @@ def ssq_jac_grad(
     model_i = -common_term * sin_jpsi
 
     # --- 4. Calculate residuals and SSQ ---
-    q_data = data[:ndata]
-    i_data = data[ndata:]
+    q_data = data[:n_harmonics]
+    i_data = data[n_harmonics:]
     residuals = np.concatenate([q_data - model_q, i_data - model_i])
     ssq = np.dot(residuals, residuals)
 
-    # --- 5. Calculate the full (2*ndata, 4) Jacobian matrix J ---
+    # --- 5. Calculate the full (2*n_harmonics, 4) Jacobian matrix J ---
     n_active_params = len(fit_params)
-    J = np.zeros((2 * ndata, n_active_params))
+    J = np.zeros((2 * n_harmonics, n_active_params))
 
     # Loop through the active parameters and calculate their derivatives
     for i, p_name in enumerate(fit_params):
         if p_name == "amp":
             if a != 0:
-                J[:ndata, i] = model_q / a
-                J[ndata:, i] = model_i / a
+                J[:n_harmonics, i] = model_q / a
+                J[n_harmonics:, i] = model_i / a
         elif p_name == "m":
             common_deriv_term_m = a * phase_term * bessel_deriv
-            J[:ndata, i] = common_deriv_term_m * cos_jpsi
-            J[ndata:, i] = -common_deriv_term_m * sin_jpsi
+            J[:n_harmonics, i] = common_deriv_term_m * cos_jpsi
+            J[n_harmonics:, i] = -common_deriv_term_m * sin_jpsi
         elif p_name == "phi":
             phase_deriv_term = np.cos(phi + j * np.pi / 2.0 + np.pi / 2.0)
             common_deriv_term_phi = a * phase_deriv_term * bessel_j
-            J[:ndata, i] = common_deriv_term_phi * cos_jpsi
-            J[ndata:, i] = -common_deriv_term_phi * sin_jpsi
+            J[:n_harmonics, i] = common_deriv_term_phi * cos_jpsi
+            J[n_harmonics:, i] = -common_deriv_term_phi * sin_jpsi
         elif p_name == "psi":
-            J[:ndata, i] = common_term * -sin_jpsi * j
-            J[ndata:, i] = -common_term * cos_jpsi * j
+            J[:n_harmonics, i] = common_term * -sin_jpsi * j
+            J[n_harmonics:, i] = -common_term * cos_jpsi * j
 
     # --- Calculate final matrices (now correctly sized) ---
     JTJ = J.T @ J
@@ -232,7 +232,7 @@ def ssq_jac_grad(
 
 
 def ssqf(
-    ndata: int, data: np.ndarray, param: np.ndarray, fit_params: List[str] = ALL_PARAMS
+    n_harmonics: int, data: np.ndarray, param: np.ndarray, fit_params: List[str] = ALL_PARAMS
 ) -> float:
     """A minimal, fast, vectorized function to calculate only the SSQ.
 
@@ -257,7 +257,7 @@ def ssqf(
         full_param["psi"],
     )
 
-    j = np.arange(1, ndata + 1)
+    j = np.arange(1, n_harmonics + 1)
 
     phase_term = np.cos(phi + j * np.pi / 2.0)
     bessel_j = jv(j, m)
@@ -266,7 +266,7 @@ def ssqf(
     model_q = common_term * np.cos(j * psi)
     model_i = -common_term * np.sin(j * psi)
 
-    residuals = np.concatenate([data[:ndata] - model_q, data[ndata:] - model_i])
+    residuals = np.concatenate([data[:n_harmonics] - model_q, data[n_harmonics:] - model_i])
     return np.dot(residuals, residuals)
 
 
@@ -313,7 +313,7 @@ def msolve(lam: float, a_g_mat: np.ndarray, b_g_mat: np.ndarray) -> np.ndarray:
 
 
 def _run_lma_fit(
-    ndata: int,
+    n_harmonics: int,
     data: np.ndarray,
     initial_guess: np.ndarray,
     fit_params: List[str] = ALL_PARAMS,
@@ -325,7 +325,7 @@ def _run_lma_fit(
     parm = initial_guess.copy()
 
     # Calculate initial state
-    ssq0, JTJ_flat, gradient = ssq_jac_grad(ndata, data, parm, fit_params)
+    ssq0, JTJ_flat, gradient = ssq_jac_grad(n_harmonics, data, parm, fit_params)
 
     for _ in range(MAX_LMA_STEPS):
         parm_old = parm.copy()
@@ -347,7 +347,7 @@ def _run_lma_fit(
             # Calculate the SSQ for the trial parameters *without* re-calculating the Jacobian.
             # We can do this with a simplified, fast ssq-only function or by inlining it.
             # Let's create a minimal, vectorized ssq function.
-            ssq_try = ssqf(ndata, data, p_try, fit_params)
+            ssq_try = ssqf(n_harmonics, data, p_try, fit_params)
 
             if ssq_try < best_ssq_step:
                 best_ssq_step = ssq_try
@@ -360,7 +360,7 @@ def _run_lma_fit(
 
         # An improvement was found, update parameters and calculate new state
         parm = best_parm_step
-        ssq0, JTJ_flat, gradient = ssq_jac_grad(ndata, data, parm, fit_params)
+        ssq0, JTJ_flat, gradient = ssq_jac_grad(n_harmonics, data, parm, fit_params)
 
         # Check for convergence
         param_change = np.linalg.norm(np.array(parm) - np.array(parm_old))
@@ -372,7 +372,7 @@ def _run_lma_fit(
     return parm, ssq0  # Return the final converged state
 
 
-def _find_best_initial_guess(ndata: int, data: np.ndarray) -> np.ndarray:
+def _find_best_initial_guess(n_harmonics: int, data: np.ndarray) -> np.ndarray:
     """Performs a grid search over 'm' to find a better initial guess.
 
     This robust fallback routine is triggered when the default guess fails.
@@ -389,18 +389,18 @@ def _find_best_initial_guess(ndata: int, data: np.ndarray) -> np.ndarray:
     for mtry in np.arange(M_GRID_MIN, M_GRID_MAX + M_GRID_STEP, M_GRID_STEP):
         sinsum, cossum = 0.0, 0.0
         nsin, ncos = 0, 0
-        j = np.arange(1, ndata + 1)
+        j = np.arange(1, n_harmonics + 1)
 
         bes_q = jv(j, mtry) * np.cos(j * psitry)
         bes_i = jv(j, mtry) * -np.sin(j * psitry)
 
-        q_data = data[:ndata]
-        i_data = data[ndata:]
+        q_data = data[:n_harmonics]
+        i_data = data[n_harmonics:]
 
         # Linear estimate of phi and amplitude based on this mtry
         # This part is complex and highly specific to the original code's logic.
         # It could be simplified, but for now we translate it directly.
-        for i in range(ndata):
+        for i in range(n_harmonics):
             if abs(bes_q[i]) > BESSEL_AMP_THRESHOLD:
                 if j[i] % 4 == 0:
                     cossum += q_data[i] / bes_q[i]
@@ -435,7 +435,7 @@ def _find_best_initial_guess(ndata: int, data: np.ndarray) -> np.ndarray:
         asum, na = 0.0, 0
         sincos_table = np.array([cos(ptry), -sin(ptry), -cos(ptry), sin(ptry)])
 
-        for i in range(ndata):
+        for i in range(n_harmonics):
             if (
                 abs(bes_q[i]) > BESSEL_AMP_THRESHOLD
                 and abs(sincos_table[j[i] % 4]) > SINCOS_AMP_THRESHOLD
@@ -454,7 +454,7 @@ def _find_best_initial_guess(ndata: int, data: np.ndarray) -> np.ndarray:
         atry = asum / na
 
         parm_try = np.array([atry, mtry, ptry, psitry])
-        ssq_try = ssqf(ndata, data, parm_try)
+        ssq_try = ssqf(n_harmonics, data, parm_try)
 
         if ssq_try < best_ssq_guess:
             best_ssq_guess = ssq_try
@@ -464,7 +464,7 @@ def _find_best_initial_guess(ndata: int, data: np.ndarray) -> np.ndarray:
 
 
 def fit(
-    ndata: int, data: np.ndarray, parm: np.ndarray, fit_params: List[str] = ALL_PARAMS
+    n_harmonics: int, data: np.ndarray, parm: np.ndarray, fit_params: List[str] = ALL_PARAMS
 ) -> Tuple[int, np.ndarray, float]:
     """Main entry point for the NLS fitting algorithm for a single data buffer.
 
@@ -474,10 +474,10 @@ def fit(
 
     Parameters
     ----------
-    ndata : int
+    n_harmonics : int
         Number of harmonics to use in the fit.
     data : np.ndarray
-        A 1D array of size `2*ndata` containing the measured I/Q values.
+        A 1D array of size `2*n_harmonics` containing the measured I/Q values.
     parm : np.ndarray
         A vector containing the initial guess for the parameters being
         actively fitted.
@@ -494,7 +494,7 @@ def fit(
     """
     # --- First, try fitting from the provided initial guess ---
     # The _run_lma_fit helper is now flexible and handles any `fit_params`.
-    fit_parm_active, fit_ssq = _run_lma_fit(ndata, data, parm, fit_params)
+    fit_parm_active, fit_ssq = _run_lma_fit(n_harmonics, data, parm, fit_params)
 
     # Check if the fit is good enough. If so, we are likely done.
     if fit_ssq < FITOK_THRESHOLD:
@@ -504,13 +504,13 @@ def fit(
         # We only use the complex retry logic for the difficult, unconstrained 4-parameter case.
         if sorted(fit_params) == sorted(ALL_PARAMS):
             # Try to find a better 4-parameter starting point and refit.
-            best_guess_parm = _find_best_initial_guess(ndata, data)
+            best_guess_parm = _find_best_initial_guess(n_harmonics, data)
 
             if np.any(best_guess_parm):  # If the grid search found a valid alternative
                 # The guess from the grid search is a full 4-param vector.
                 # `parm` here is also the full 4-param vector from the first attempt.
                 fit_parm_retry, fit_ssq_retry = _run_lma_fit(
-                    ndata, data, best_guess_parm, fit_params
+                    n_harmonics, data, best_guess_parm, fit_params
                 )
 
                 # Use the result of the retry if it was better

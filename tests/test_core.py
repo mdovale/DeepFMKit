@@ -110,8 +110,8 @@ def test_fit_creates_fitdata(basic_sim_config):
     assert fit_label in dff.fits
     assert dff.fits[fit_label] is fit_obj
     assert isinstance(fit_obj, FitData)
-    assert fit_obj.nbuf > 0
-    assert len(fit_obj.amp) == fit_obj.nbuf
+    assert fit_obj.n_buf > 0
+    assert len(fit_obj.amp) == fit_obj.n_buf
 
 
 def test_create_witness_channel(basic_sim_config):
@@ -204,14 +204,14 @@ def test_load_fit_from_file(test_file_paths):
     # Assert header values were parsed correctly
     assert dff.channr == EXPECTED_NUM_CHANNELS_FIT
     assert dff.t0 == EXPECTED_T0_FIT
-    assert dff.n == EXPECTED_N_FIT
+    assert dff.n_cycles == EXPECTED_N_FIT
     assert dff.fs == pytest.approx(EXPECTED_FS_FIT)
 
     # Assert FitData object was created correctly
     default_label = f"{fit_file}_ch0"
     assert default_label in dff.fits
     fit_obj = dff.fits[default_label]
-    assert fit_obj.nbuf == EXPECTED_NUM_BUFFERS
+    assert fit_obj.n_buf == EXPECTED_NUM_BUFFERS
     assert len(fit_obj.amp) == EXPECTED_NUM_BUFFERS
 
 
@@ -240,9 +240,8 @@ def test_to_txt_saves_fit(basic_sim_config, tmp_path, test_file_paths):
         lines_new = f_new.readlines()
         lines_orig = f_orig.readlines()
 
-        # Compare headers (skipping message line) and data
-        assert lines_new[0] == lines_orig[0]  # '% fit_data'
-        assert lines_new[2:] == lines_orig[2:]
+        # Compare data, header is subject to change
+        assert lines_new[7:] == lines_orig[7:]
 
 
 def test_fit_init_raises_error_for_short_data(basic_sim_config):

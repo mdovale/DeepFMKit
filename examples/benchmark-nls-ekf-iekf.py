@@ -126,7 +126,7 @@ if __name__ == "__main__":
     print(f"  - Data Duration: {N_SECONDS}s ({n_samples} samples)")
     print(f"  - Total Number of Fits: {n_fits}")
     print(f"  - Cycles per Fit (n): {N_CYCLES_PER_BUFFER}")
-    print(f"  - Harmonics per Fit (ndata): {N_HARMONICS}")
+    print(f"  - Harmonics per Fit (n_harmonics): {N_HARMONICS}")
     
     dff_nls, data_label_nls = setup_benchmark_data(
         n_seconds=N_SECONDS, f_samp=F_SAMP, fm=FM, label="nls_data"
@@ -136,7 +136,7 @@ if __name__ == "__main__":
     print("\nRunning NLS SEQUENTIAL benchmark...")
     seq_fit_func = lambda: dff_nls.fit(
         main_label=data_label_nls, method='nls', n=N_CYCLES_PER_BUFFER,
-        ndata=N_HARMONICS, parallel=False, verbose=False
+        n_harmonics=N_HARMONICS, parallel=False, verbose=False
     )
     seq_time = run_timing(seq_fit_func, repetitions=REPETITIONS)
     nls_seq_throughput_ksps = (n_samples / seq_time) / 1000.0
@@ -148,7 +148,7 @@ if __name__ == "__main__":
     print(f"Running NLS PARALLEL benchmark on {n_cores} cores...")
     par_fit_func = lambda: dff_nls.fit(
         main_label=data_label_nls, method='nls', n=N_CYCLES_PER_BUFFER,
-        ndata=N_HARMONICS, parallel=True, n_cores=n_cores, verbose=False
+        n_harmonics=N_HARMONICS, parallel=True, n_cores=n_cores, verbose=False
     )
     par_time = run_timing(par_fit_func, repetitions=REPETITIONS)
     nls_par_throughput_ksps = (n_samples / par_time) / 1000.0

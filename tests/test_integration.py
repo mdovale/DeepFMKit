@@ -71,7 +71,7 @@ def test_full_workflow_noiseless_static(basic_sim_config):
     dff = DeepFrame()
     dff.add_sim(sim_config)
     dff.simulate(
-        label=sim_label, n_seconds=10 / sim_config.laser.fm, mode="snr", snr_db=60
+        label=sim_label, n_seconds=10/sim_config.laser.fm, mode="snr", snr_db=60
     )
 
     fit_label = "integration_test_fit"
@@ -79,7 +79,7 @@ def test_full_workflow_noiseless_static(basic_sim_config):
         main_label=sim_label,
         method="nls",
         fit_label=fit_label,
-        n=10,
+        n_cycles=10,
         parallel=False,
         init_psi_method="scan",
     )

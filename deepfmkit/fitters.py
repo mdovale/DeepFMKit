@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 
 
 @jit(nopython=True)
-def _ekf_core_loop(data, t_axis, w_m, R_downsample, nbuf,
+def _ekf_core_loop(data, t_axis, w_m, R_downsample, n_buf,
                    x_init, P_init, Q, R_val):
     """
     Core JIT-compiled loop for the basic Extended Kalman Filter.
@@ -93,7 +93,7 @@ def _ekf_core_loop(data, t_axis, w_m, R_downsample, nbuf,
     F = np.eye(dim_x)
     R = np.array([[R_val]])
     
-    results = np.zeros((nbuf, dim_x))
+    results = np.zeros((n_buf, dim_x))
     n_samp = len(data)
 
     # --- Main Loop ---
@@ -131,13 +131,13 @@ def _ekf_core_loop(data, t_axis, w_m, R_downsample, nbuf,
         # Store result at the downsampled rate
         if (k + 1) % R_downsample == 0:
             buf_idx = (k + 1) // R_downsample - 1
-            if buf_idx >= 0 and buf_idx < nbuf:
+            if buf_idx >= 0 and buf_idx < n_buf:
                 results[buf_idx, :] = x
                 
     return x, results
 
 @jit(nopython=True)
-def _integrated_ekf_core_loop(raw_data, t_axis, w_m, dt, R_downsample, nbuf,
+def _integrated_ekf_core_loop(raw_data, t_axis, w_m, dt, R_downsample, n_buf,
                               x_init, P_init, Q, R_val):
     """
     Core JIT-compiled loop for the EKF with a constant velocity process model.
@@ -168,7 +168,7 @@ def _integrated_ekf_core_loop(raw_data, t_axis, w_m, dt, R_downsample, nbuf,
     for i in range(dim_x // 2): # This correctly loops 5 times for the 5 blocks
         F[2*i:2*i+2, 2*i:2*i+2] = F_block
         
-    results = np.zeros((nbuf, dim_x))
+    results = np.zeros((n_buf, dim_x))
     n_samp = len(raw_data)
 
     # --- Main Loop ---
@@ -207,7 +207,7 @@ def _integrated_ekf_core_loop(raw_data, t_axis, w_m, dt, R_downsample, nbuf,
         # Store result at the downsampled rate
         if (k + 1) % R_downsample == 0:
             buf_idx = (k + 1) // R_downsample - 1
-            if buf_idx >= 0 and buf_idx < nbuf:
+            if buf_idx >= 0 and buf_idx < n_buf:
                 results[buf_idx, :] = x
                 
     return x, results
@@ -228,7 +228,7 @@ def _process_fit_chunk(args: tuple) -> List[Dict[str, Any]]:
         - raw_data_chunk (np.ndarray): A 2D array of raw data, shape (n_buffers, R).
         - initial_guess_active (list[float]): The initial parameter guess for the active parameters.
         - R (int): The number of samples per buffer.
-        - ndata (int): The number of harmonics to use in the fit.
+        - n_harmonics (int): The number of harmonics to use in the fit.
         - fm (float): The modulation frequency in Hz.
         - f_samp (float): The sampling frequency in Hz.
         - fit_params (list[str]): The list of parameter names being actively fitted.
@@ -240,7 +240,7 @@ def _process_fit_chunk(args: tuple) -> List[Dict[str, Any]]:
         for a single buffer in the chunk.
     """
     # Unpack arguments
-    raw_data_chunk, initial_guess_active, R, ndata, fm, f_samp, fit_params, skip_dc = args
+    raw_data_chunk, initial_guess_active, R, n_harmonics, fm, f_samp, fit_params, skip_dc = args
 
     # Setup
     results_list = []
@@ -251,15 +251,15 @@ def _process_fit_chunk(args: tuple) -> List[Dict[str, Any]]:
     for i in range(raw_data_chunk.shape[0]):
         buffer_data = raw_data_chunk[i]
 
-        QI_data_mean = np.zeros(2 * ndata)
-        for n in range(ndata):
+        QI_data_mean = np.zeros(2 * n_harmonics)
+        for n in range(n_harmonics):
             Q_data, I_data = calculate_quadratures(n, buffer_data, w0)
             QI_data_mean[n] = Q_data.mean()
-            QI_data_mean[n + ndata] = I_data.mean()
+            QI_data_mean[n + n_harmonics] = I_data.mean()
 
         # Pass the active guess and param list to the low-level fit function
         status, fit_parm_full, fit_ssq = fit(
-            ndata, QI_data_mean, current_guess_active, fit_params
+            n_harmonics, QI_data_mean, current_guess_active, fit_params
         )
 
         # Update the guess for the next iteration using the newly fitted active parameters
@@ -291,10 +291,10 @@ def _process_fit_chunk(args: tuple) -> List[Dict[str, Any]]:
     return results_list
 
 
-def _calculate_fit_params(raw_obj: RawData, n: int) -> Tuple[int, float, int]:
+def _calculate_fit_params(raw_obj: RawData, n_cycles: int) -> Tuple[int, float, int]:
     """Calculates buffer and rate parameters for a fit."""
     # --- Basic validations ---
-    if not isinstance(n, int) or n <= 0:
+    if not isinstance(n_cycles, int) or n_cycles <= 0:
         raise ValueError(f"`n` must be a positive integer, got {n!r}.")
     if not (math.isfinite(raw_obj.f_samp) and raw_obj.f_samp > 0):
         raise ValueError(f"`f_samp` must be finite and > 0, got {raw_obj.f_samp!r}.")
@@ -304,7 +304,7 @@ def _calculate_fit_params(raw_obj: RawData, n: int) -> Tuple[int, float, int]:
         raise TypeError("`raw_obj.data` must be an array-like with a .shape attribute.")
 
     # --- Compute target buffer size (in samples) ---
-    R_float = (raw_obj.f_samp / raw_obj.fm) * n
+    R_float = (raw_obj.f_samp / raw_obj.fm) * n_cycles
     if not math.isfinite(R_float) or R_float < 1:
         raise ValueError(
             "Requested configuration yields <1 sample per buffer. "
@@ -323,8 +323,8 @@ def _calculate_fit_params(raw_obj: RawData, n: int) -> Tuple[int, float, int]:
             f"need at least R={R} samples, but data has N={N}. "
             "Increase data length or reduce `n`."
         )
-    nbuf = N // R
-    return R, fs, nbuf
+    n_buf = N // R
+    return R, fs, n_buf
 
 
 
@@ -350,8 +350,8 @@ class BaseFitter(ABC):
             A dictionary of fitting parameters.
         """
         self.config = fit_config
-        if "n" not in self.config:
-            raise ValueError("Fit configuration must include 'n'.")
+        if "n_cycles" not in self.config:
+            raise ValueError("Fit configuration must include 'n_cycles'.")
 
     @abstractmethod
     def fit(self, main_raw: RawData, **kwargs: Any) -> pd.DataFrame:
@@ -456,7 +456,7 @@ class StandardEKF(BaseFitter):
         w_m = 2 * np.pi * main_raw.fm
         t_axis = np.arange(n_samp) / main_raw.f_samp
 
-        R_downsample, _, nbuf = _calculate_fit_params(main_raw, self.config["n"])
+        R_downsample, _, n_buf = _calculate_fit_params(main_raw, self.config["n_cycles"])
 
         # --- 2. Call the High-Performance Core Loop ---
         logging.info(f"Running JIT-compiled EKF for {n_samp} samples...")
@@ -465,7 +465,7 @@ class StandardEKF(BaseFitter):
             print("Numba JIT compilation may take a moment on the first run...")
 
         _, results = _ekf_core_loop(
-            data, t_axis, w_m, R_downsample, nbuf,
+            data, t_axis, w_m, R_downsample, n_buf,
             x_init, P_init, Q, R_val_actual
         )
         
@@ -478,8 +478,8 @@ class StandardEKF(BaseFitter):
             "phi": results[:, 2],
             "psi": results[:, 3],
             "dc": results[:, 4],
-            "ssq": np.zeros(nbuf),
-            "fitok": np.ones(nbuf, dtype=int),
+            "ssq": np.zeros(n_buf),
+            "fitok": np.ones(n_buf, dtype=int),
         }
 
         return pd.DataFrame(df_dict)
@@ -572,7 +572,7 @@ class IntegratedEKF(BaseFitter):
         w_m = 2 * np.pi * main_raw.fm
         t_axis = np.arange(n_samp) * dt
 
-        R_downsample, _, nbuf = _calculate_fit_params(main_raw, self.config["n"])
+        R_downsample, _, n_buf = _calculate_fit_params(main_raw, self.config["n_cycles"])
 
         # --- 2. Call the High-Performance Core Loop ---
         logging.info(f"Running JIT-compiled 10D Integrated EKF for {n_samp} samples...")
@@ -580,7 +580,7 @@ class IntegratedEKF(BaseFitter):
             print("Numba JIT compilation may take a moment on the first run...")
 
         _, results = _integrated_ekf_core_loop( 
-            raw_data_np, t_axis, w_m, dt, R_downsample, nbuf,
+            raw_data_np, t_axis, w_m, dt, R_downsample, n_buf,
             x_init, P_init, Q, R_val_actual
         )
         
@@ -593,8 +593,8 @@ class IntegratedEKF(BaseFitter):
             "m":   results[:, 4],   "m_dot": results[:, 5],
             "amp":   results[:, 6], "amp_dot": results[:, 7], # AC amplitude and its rate
             "dc":  results[:, 8],   "dc_dot":  results[:, 9], # DC offset and its rate
-            "ssq": np.zeros(nbuf),
-            "fitok": np.ones(nbuf, dtype=int),
+            "ssq": np.zeros(n_buf),
+            "fitok": np.ones(n_buf, dtype=int),
         }
 
         return pd.DataFrame(df_dict)
@@ -615,14 +615,14 @@ class StandardNLS(BaseFitter):
         fit_config : dict
             A dictionary of fitting parameters, including:
             - n (int): The number of modulation cycles per output buffer.
-            - ndata (int, optional): Number of harmonics to fit. Defaults to 10.
+            - n_harmonics (int, optional): Number of harmonics to fit. Defaults to 10.
             - fit_params (list[str], optional): List of parameters to fit.
               Defaults to all four: ['amp', 'm', 'phi', 'psi'].
             - init_psi_method (str, optional): Method for smart initialization
               of psi ('scan' or 'minimize'). If None, a standard guess is used.
         """
         super().__init__(fit_config)
-        self.ndata = self.config.get("ndata", 10)
+        self.n_harmonics = self.config.get("n_harmonics", 10)
         self.fit_params = self.config.get("fit_params", ALL_PARAMS)
         self.init_psi_method = self.config.get("init_psi_method", None)
 
@@ -638,7 +638,7 @@ class StandardNLS(BaseFitter):
         main_raw : RawData
             The raw data object for the primary channel.
         **kwargs : Any
-            - ndata (int): Number of harmonics to fit. Defaults to 10.
+            - n_harmonics (int): Number of harmonics to fit. Defaults to 10.
             - fit_params (list[str]): List of parameters to fit (e.g.,
               ['amp', 'm', 'phi']). Defaults to all four.
             - init_psi_method (str): Method for smart initialization of psi
@@ -652,7 +652,7 @@ class StandardNLS(BaseFitter):
             A DataFrame containing the time-series of fitted parameters.
         """
         # --- 0. Unpack Configuration ---
-        n = self.config["n"]
+        n_cycles = self.config["n_cycles"]
 
         # Determine which parameters to fit. Defaults to all four standard parameters.
         fit_params = kwargs.get("fit_params", ALL_PARAMS)
@@ -664,8 +664,8 @@ class StandardNLS(BaseFitter):
         init_phi = kwargs.get("init_phi", DEFAULT_GUESS["phi"])
 
         # Calculate buffer parameters based on the raw data object.
-        R, _, nbuf = _calculate_fit_params(main_raw, n)
-        if nbuf == 0:
+        R, _, n_buf = _calculate_fit_params(main_raw, n_cycles)
+        if n_buf == 0:
             logging.warning("Number of buffers is zero. No data to fit.")
             return pd.DataFrame()
 
@@ -676,7 +676,7 @@ class StandardNLS(BaseFitter):
             # The _psi_init routine requires a full 4-parameter fit to properly
             # evaluate the SSQ landscape for psi.
             init_psi = self._psi_init(
-                main_raw, self.init_psi_method, init_a, init_m, R, self.ndata
+                main_raw, self.init_psi_method, init_a, init_m, R, self.n_harmonics
             )
         else:
             # If smart initialization is disabled or if psi is not a fit parameter,
@@ -700,19 +700,19 @@ class StandardNLS(BaseFitter):
         # Based on the 'parallel' flag, run the fit sequentially or in parallel.
         if parallel:
             return self._fit_parallel(
-                main_raw, R, nbuf, self.ndata, initial_guess_active, self.fit_params, **kwargs
+                main_raw, R, n_buf, self.n_harmonics, initial_guess_active, self.fit_params, **kwargs
             )
         else:
             return self._fit_sequential(
-                main_raw, R, nbuf, self.ndata, initial_guess_active, self.fit_params, **kwargs
+                main_raw, R, n_buf, self.n_harmonics, initial_guess_active, self.fit_params, **kwargs
             )
 
     def _fit_sequential(
         self,
         main_raw: RawData,
         R: int,
-        nbuf: int,
-        ndata: int,
+        n_buf: int,
+        n_harmonics: int,
         initial_guess_active: List[float],
         fit_params: List[str],
         **kwargs: Any,
@@ -727,18 +727,18 @@ class StandardNLS(BaseFitter):
         current_guess_active = np.array(initial_guess_active)
         results_list = []
 
-        # Reshape the entire dataset into a 2D array of [nbuf, R] for efficient iteration.
+        # Reshape the entire dataset into a 2D array of [n_buf, R] for efficient iteration.
         raw_data_full = main_raw.data.values.reshape(-1, R)
 
         # Iterate directly over the chunks of data in raw_data_full.
-        for b in range(nbuf):
+        for b in range(n_buf):
             # Pass the actual data buffer to the fitting helper function.
             raw_buffer = raw_data_full[b]
             result_dict = self._fit_single_buffer(
                 raw_buffer,
                 main_raw.fm,
                 main_raw.f_samp,
-                ndata,
+                n_harmonics,
                 current_guess_active,
                 fit_params,
                 skip_dc,
@@ -757,15 +757,15 @@ class StandardNLS(BaseFitter):
         self,
         main_raw: RawData,
         R: int,
-        nbuf: int,
-        ndata: int,
+        n_buf: int,
+        n_harmonics: int,
         initial_guess_active: List[float],
         fit_params: List[str],
         **kwargs: Any,
     ) -> pd.DataFrame:
         """Executes the fit in parallel across multiple cores."""
         n_cores = kwargs.get("n_cores", os.cpu_count())
-        n_cores = min(n_cores, nbuf - 1 if nbuf > 1 else 1)
+        n_cores = min(n_cores, n_buf - 1 if n_buf > 1 else 1)
         skip_dc = kwargs.get("skip_dc", False)
 
         logging.debug(
@@ -781,7 +781,7 @@ class StandardNLS(BaseFitter):
             raw_buffer_first,
             main_raw.fm,
             main_raw.f_samp,
-            ndata,
+            n_harmonics,
             initial_guess_active,
             fit_params,
             skip_dc,
@@ -797,7 +797,7 @@ class StandardNLS(BaseFitter):
         seed_guess_active = [seed_guess_dict[p_name] for p_name in fit_params]
 
         raw_data_full = main_raw.data.values.reshape(-1, R)
-        if nbuf <= 1:
+        if n_buf <= 1:
             return pd.DataFrame([first_fit_result])
 
         # Split the remaining data into chunks for the worker processes.
@@ -807,7 +807,7 @@ class StandardNLS(BaseFitter):
                 chunk,
                 seed_guess_active,
                 R,
-                ndata,
+                n_harmonics,
                 main_raw.fm,
                 main_raw.f_samp,
                 fit_params,
@@ -838,7 +838,7 @@ class StandardNLS(BaseFitter):
         raw_buffer: np.ndarray,
         fm: float,
         f_samp: float,
-        ndata: int,
+        n_harmonics: int,
         initial_guess_active: np.ndarray,
         fit_params: List[str],
         skip_dc: bool = False
@@ -849,15 +849,15 @@ class StandardNLS(BaseFitter):
         """
         # Calculate the I/Q components from the provided data buffer.
         w0 = 2.0 * np.pi * fm / f_samp
-        QI_data_mean = np.zeros(2 * ndata)
-        for n in range(ndata):
+        QI_data_mean = np.zeros(2 * n_harmonics)
+        for n in range(n_harmonics):
             Q_data, I_data = calculate_quadratures(n, raw_buffer, w0)
             QI_data_mean[n] = Q_data.mean()
-            QI_data_mean[n + ndata] = I_data.mean()
+            QI_data_mean[n + n_harmonics] = I_data.mean()
 
         # Call the core NLS fitting routine from fit.py.
         status, fit_parm_full, fit_ssq = fit(
-            ndata, QI_data_mean, initial_guess_active, fit_params
+            n_harmonics, QI_data_mean, initial_guess_active, fit_params
         )
 
         # DC offset calculation.
@@ -887,11 +887,11 @@ class StandardNLS(BaseFitter):
         init_a: float,
         init_m: float,
         R: int,
-        ndata: int,
+        n_harmonics: int,
     ) -> float:
         """Finds a robust initial guess for the `psi` parameter."""
         logging.debug(f"Initializing psi parameter using '{method}' method...")
-        try_psi_args = (main_raw, init_a, init_m, R, ndata)
+        try_psi_args = (main_raw, init_a, init_m, R, n_harmonics)
         if method == "scan":
             psi_candidates = np.linspace(0, 2 * np.pi, 20, endpoint=False)
             ssq_values = [self._try_psi(p, *try_psi_args) for p in psi_candidates]
@@ -919,7 +919,7 @@ class StandardNLS(BaseFitter):
         init_a: float,
         init_m: float,
         R: int,
-        ndata: int,
+        n_harmonics: int,
     ) -> float:
         """Helper function to test a single psi value and return the resulting SSQ."""
         initial_guess = np.array([init_a, init_m, 0.0, psi])
@@ -933,7 +933,7 @@ class StandardNLS(BaseFitter):
             raw_buffer_first,
             main_raw.fm,
             main_raw.f_samp,
-            ndata,
+            n_harmonics,
             initial_guess,
             fit_params,
         )

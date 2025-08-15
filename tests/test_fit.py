@@ -57,13 +57,13 @@ def synthetic_iq_data():
         "phi": np.pi / 4,
         "psi": -np.pi / 8,
     }
-    ndata = 20
+    n_harmonics = 20
 
     # --- Reference implementation of the I/Q model (from the manuscript) ---
     # This is a simple, clear, but slow version used to validate the fast one.
-    q_model = np.zeros(ndata)
-    i_model = np.zeros(ndata)
-    n = np.arange(1, ndata + 1)
+    q_model = np.zeros(n_harmonics)
+    i_model = np.zeros(n_harmonics)
+    n = np.arange(1, n_harmonics + 1)
 
     # Note the model for Q_n and I_n from the paper corresponds to
     # the mean of the demodulated signals. The `fit` functions use a slightly
@@ -90,7 +90,7 @@ def synthetic_iq_data():
 
     param_vector = np.array([params[p] for p in ALL_PARAMS])
 
-    return {"params": param_vector, "iq_data": iq_data, "ndata": ndata}
+    return {"params": param_vector, "iq_data": iq_data, "n_harmonics": n_harmonics}
 
 
 def test_ssqf_zero_at_ground_truth(synthetic_iq_data):
@@ -101,9 +101,9 @@ def test_ssqf_zero_at_ground_truth(synthetic_iq_data):
     """
     params = synthetic_iq_data["params"]
     iq_data = synthetic_iq_data["iq_data"]
-    ndata = synthetic_iq_data["ndata"]
+    n_harmonics = synthetic_iq_data["n_harmonics"]
 
-    ssq = fit.ssqf(ndata, iq_data, params)
+    ssq = fit.ssqf(n_harmonics, iq_data, params)
 
     assert ssq == pytest.approx(0.0, abs=1e-12)
 
@@ -116,9 +116,9 @@ def test_zero_gradient_at_ground_truth(synthetic_iq_data):
     """
     params = synthetic_iq_data["params"]
     iq_data = synthetic_iq_data["iq_data"]
-    ndata = synthetic_iq_data["ndata"]
+    n_harmonics = synthetic_iq_data["n_harmonics"]
 
-    ssq, _, gradient = fit.ssq_jac_grad(ndata, iq_data, params)
+    ssq, _, gradient = fit.ssq_jac_grad(n_harmonics, iq_data, params)
 
     # At the minimum of the SSQ, the gradient should be zero.
     assert ssq == pytest.approx(0.0, abs=1e-12)
@@ -133,13 +133,13 @@ def test_fit_converges_to_ground_truth_from_good_guess(synthetic_iq_data):
     """
     true_params = synthetic_iq_data["params"]
     iq_data = synthetic_iq_data["iq_data"]
-    ndata = synthetic_iq_data["ndata"]
+    n_harmonics = synthetic_iq_data["n_harmonics"]
 
     # Create an initial guess that is slightly perturbed from the truth
     initial_guess = true_params * np.array([0.9, 1.1, 1.2, 0.8])
 
     # Run the fitter
-    status, final_params, final_ssq = fit.fit(ndata, iq_data, initial_guess)
+    status, final_params, final_ssq = fit.fit(n_harmonics, iq_data, initial_guess)
 
     # --- Assertions ---
     assert status == 0, "Fit should report success (status 0)."
@@ -178,8 +178,8 @@ def test_fit_with_constrained_parameters():
     }
 
     # Generate the synthetic I/Q data using these exact parameters.
-    ndata = 20
-    n = np.arange(1, ndata + 1)
+    n_harmonics = 20
+    n = np.arange(1, n_harmonics + 1)
     q_model = (
         true_params_dict["amp"]
         * np.cos(true_params_dict["phi"] + n * np.pi / 2)
@@ -204,7 +204,7 @@ def test_fit_with_constrained_parameters():
 
     # Run the constrained fit. Now the model and data match perfectly.
     status, final_params_full, final_ssq = fit.fit(
-        ndata, iq_data, initial_guess_active, fit_params=fit_params_to_use
+        n_harmonics, iq_data, initial_guess_active, fit_params=fit_params_to_use
     )
 
     # --- Assertions ---
@@ -235,18 +235,18 @@ def test_fit_robust_retry_mechanism():
     # Create synthetic data with a known 'm' value
     true_m = 15.3
     params = np.array([1.0, true_m, 0.5, 0.1])
-    ndata = 20
+    n_harmonics = 20
     q_model = (
         params[0]
-        * np.cos(params[2] + np.arange(1, ndata + 1) * np.pi / 2)
-        * jv(np.arange(1, ndata + 1), params[1])
-        * np.cos(np.arange(1, ndata + 1) * params[3])
+        * np.cos(params[2] + np.arange(1, n_harmonics + 1) * np.pi / 2)
+        * jv(np.arange(1, n_harmonics + 1), params[1])
+        * np.cos(np.arange(1, n_harmonics + 1) * params[3])
     )
     i_model = (
         -params[0]
-        * np.cos(params[2] + np.arange(1, ndata + 1) * np.pi / 2)
-        * jv(np.arange(1, ndata + 1), params[1])
-        * np.sin(np.arange(1, ndata + 1) * params[3])
+        * np.cos(params[2] + np.arange(1, n_harmonics + 1) * np.pi / 2)
+        * jv(np.arange(1, n_harmonics + 1), params[1])
+        * np.sin(np.arange(1, n_harmonics + 1) * params[3])
     )
     iq_data = np.concatenate([q_model, i_model])
 
@@ -255,7 +255,7 @@ def test_fit_robust_retry_mechanism():
 
     # Run the fit. We expect the first attempt to be bad, triggering the retry.
     # The retry should find a better guess and converge correctly.
-    status, final_params, final_ssq = fit.fit(ndata, iq_data, bad_initial_guess)
+    status, final_params, final_ssq = fit.fit(n_harmonics, iq_data, bad_initial_guess)
 
     # --- Assertions ---
     # The status code '1' indicates a successful fit after a retry.

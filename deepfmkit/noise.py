@@ -38,7 +38,7 @@
 This module provides classes for generating white, red (Brownian), and general
 colored (1/f^alpha) noise time-series. The core generation method for colored
 noise follows the numerically stable approach of using a cascade of first-order
-IIR filters to shape white noise, as described by S. Plaszczynski [1]_.
+IIR filters to shape white noise, as described by Plaszczynski.
 
 This implementation is highly optimized for performance and stability:
 1.  **Numba-JIT Acceleration**: The core filter cascade loop in `alpha_noise`

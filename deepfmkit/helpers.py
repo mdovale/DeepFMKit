@@ -38,17 +38,17 @@ from scipy.special import jv
 from scipy.linalg import inv
 
 
-def calculate_jacobian(ndata: int, param: np.ndarray) -> np.ndarray:
+def calculate_jacobian(n_harmonics: int, param: np.ndarray) -> np.ndarray:
     """Calculates the Jacobian matrix (J) of the ideal DFMI model.
 
     The Jacobian describes the sensitivity of the model's outputs (the I/Q
     values of each harmonic) to changes in its input parameters. It is a
-    matrix of shape `(2 * ndata, 4)`.
+    matrix of shape `(2 * n_harmonics, 4)`.
 
     Parameters
     ----------
-    ndata : int
-        The number of harmonics (from 1 to ndata) to include in the model.
+    n_harmonics : int
+        The number of harmonics (from 1 to n_harmonics) to include in the model.
     param : np.ndarray
         A 4-element array containing the model parameters: `[amp, m, phi, psi]`.
 
@@ -57,12 +57,12 @@ def calculate_jacobian(ndata: int, param: np.ndarray) -> np.ndarray:
     np.ndarray
         The Jacobian matrix `J`, where `J[i, j]` is the partial derivative of
         the i-th model output with respect to the j-th parameter. The first
-        `ndata` rows correspond to the Q components, and the next `ndata` rows
+        `n_harmonics` rows correspond to the Q components, and the next `n_harmonics` rows
         correspond to the I components.
     """
     a, m, phi, psi = param
-    J = np.zeros((2 * ndata, 4))
-    j = np.arange(1, ndata + 1)
+    J = np.zeros((2 * n_harmonics, 4))
+    j = np.arange(1, n_harmonics + 1)
 
     phase_term = np.cos(phi + j * np.pi / 2.0)
     cos_jpsi = np.cos(j * psi)
@@ -76,25 +76,25 @@ def calculate_jacobian(ndata: int, param: np.ndarray) -> np.ndarray:
     model_i = -common_term * sin_jpsi
 
     if a != 0:
-        J[:ndata, 0] = model_q / a
-        J[ndata:, 0] = model_i / a
+        J[:n_harmonics, 0] = model_q / a
+        J[n_harmonics:, 0] = model_i / a
 
     common_deriv_term_m = a * phase_term * bessel_deriv
-    J[:ndata, 1] = common_deriv_term_m * cos_jpsi
-    J[ndata:, 1] = -common_deriv_term_m * sin_jpsi
+    J[:n_harmonics, 1] = common_deriv_term_m * cos_jpsi
+    J[n_harmonics:, 1] = -common_deriv_term_m * sin_jpsi
 
     phase_deriv_term = np.cos(phi + j * np.pi / 2.0 + np.pi / 2.0)
     common_deriv_term_phi = a * phase_deriv_term * bessel_j
-    J[:ndata, 2] = common_deriv_term_phi * cos_jpsi
-    J[ndata:, 2] = -common_deriv_term_phi * sin_jpsi
+    J[:n_harmonics, 2] = common_deriv_term_phi * cos_jpsi
+    J[n_harmonics:, 2] = -common_deriv_term_phi * sin_jpsi
 
-    J[:ndata, 3] = common_term * -sin_jpsi * j
-    J[ndata:, 3] = -common_term * cos_jpsi * j
+    J[:n_harmonics, 3] = common_term * -sin_jpsi * j
+    J[n_harmonics:, 3] = -common_term * cos_jpsi * j
 
     return J
 
 
-def calculate_m_precision(m_range: np.ndarray, ndata: int, snr_db: float) -> np.ndarray:
+def calculate_m_precision(m_range: np.ndarray, n_harmonics: int, snr_db: float) -> np.ndarray:
     """Calculates the statistical uncertainty of the 'm' parameter.
 
     This function computes the theoretical precision (standard deviation) with
@@ -106,7 +106,7 @@ def calculate_m_precision(m_range: np.ndarray, ndata: int, snr_db: float) -> np.
     ----------
     m_range : np.ndarray
         An array of modulation depth `m` values (in radians) to analyze.
-    ndata : int
+    n_harmonics : int
         The number of harmonics to use in the fit.
     snr_db : float
         The Signal-to-Noise Ratio in dB for the I/Q measurements. This SNR
@@ -134,7 +134,7 @@ def calculate_m_precision(m_range: np.ndarray, ndata: int, snr_db: float) -> np.
     delta_m_list = []
     for m_true in m_range:
         param_fixed[1] = m_true
-        J = calculate_jacobian(ndata, param_fixed)
+        J = calculate_jacobian(n_harmonics, param_fixed)
         JTJ = J.T @ J
         try:
             covariance_matrix = noise_variance * inv(JTJ)
