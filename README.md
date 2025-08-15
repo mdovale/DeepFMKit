@@ -128,7 +128,7 @@ dff.add_sim(sim_dynamic)
 dff.simulate(label="dynamic_channel", n_seconds=2, mode='asd')
 
 # Fit using the EKF
-dff.fit(main_label="dynamic_channel", method='ekf', fit_label="ekf_fit")
+dff.fit(label="dynamic_channel", method='ekf', fit_label="ekf_fit")
 
 # Plot the EKF's phase estimate and compare to the ground truth
 ax = dff.plot(labels=['ekf_fit'], which=['phi'])

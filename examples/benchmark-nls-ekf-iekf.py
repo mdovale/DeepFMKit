@@ -135,7 +135,7 @@ if __name__ == "__main__":
     # 1. NLS Sequential Timing
     print("\nRunning NLS SEQUENTIAL benchmark...")
     seq_fit_func = lambda: dff_nls.fit(
-        main_label=data_label_nls, method='nls', n=N_CYCLES_PER_BUFFER,
+        label=data_label_nls, method='nls', n=N_CYCLES_PER_BUFFER,
         n_harmonics=N_HARMONICS, parallel=False, verbose=False
     )
     seq_time = run_timing(seq_fit_func, repetitions=REPETITIONS)
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     n_cores = os.cpu_count()
     print(f"Running NLS PARALLEL benchmark on {n_cores} cores...")
     par_fit_func = lambda: dff_nls.fit(
-        main_label=data_label_nls, method='nls', n=N_CYCLES_PER_BUFFER,
+        label=data_label_nls, method='nls', n=N_CYCLES_PER_BUFFER,
         n_harmonics=N_HARMONICS, parallel=True, n_cores=n_cores, verbose=False
     )
     par_time = run_timing(par_fit_func, repetitions=REPETITIONS)
@@ -166,7 +166,7 @@ if __name__ == "__main__":
     )
 
     print("\nRunning EKF benchmark...")
-    ekf_fit_func = lambda: dff_ekf.fit(main_label=data_label_ekf, method='ekf', verbose=False)
+    ekf_fit_func = lambda: dff_ekf.fit(label=data_label_ekf, method='ekf', verbose=False)
     ekf_time = run_timing(ekf_fit_func, repetitions=REPETITIONS)
     
     ekf_throughput_ksps = (n_samples / ekf_time) / 1000.0
@@ -184,7 +184,7 @@ if __name__ == "__main__":
     )
 
     print("\nRunning Integrated EKF benchmark...")
-    iekf_fit_func = lambda: dff_iekf.fit(main_label=data_label_iekf, method='iekf', verbose=False)
+    iekf_fit_func = lambda: dff_iekf.fit(label=data_label_iekf, method='iekf', verbose=False)
     iekf_time = run_timing(iekf_fit_func, repetitions=REPETITIONS)
     
     iekf_throughput_ksps = (n_samples / iekf_time) / 1000.0

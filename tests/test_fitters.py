@@ -65,13 +65,13 @@ def test_nls_fitter_sequential_vs_parallel(basic_sim_config):
 
     # --- Run in Sequential Mode ---
     fit_seq = dff.fit(
-        main_label="test_sim", method="nls", fit_label="fit_sequential", parallel=False
+        label="test_sim", method="nls", fit_label="fit_sequential", parallel=False
     )
     results_seq = dff.fits_df["fit_sequential"]
 
     # --- Run in Parallel Mode ---
     fit_par = dff.fit(
-        main_label="test_sim",
+        label="test_sim",
         method="nls",
         fit_label="fit_parallel",
         parallel=True,
@@ -100,7 +100,7 @@ def test_nls_fitter_constrained_fit(basic_sim_config):
     dff.simulate(label="test_sim", n_seconds=0.1, mode="snr", snr_db=1000)
 
     fit_obj = dff.fit(
-        main_label="test_sim",
+        label="test_sim",
         method="nls",
         fit_params=["amp", "phi"],  # Only fit for amp and phi
         parallel=False,
@@ -131,7 +131,7 @@ def test_nls_fitter_psi_init(basic_sim_config):
 
     # --- Fit WITHOUT smart init (expected to be less accurate or fail) ---
     fit_bad_guess = dff.fit(
-        main_label="test_sim",
+        label="test_sim",
         method="nls",
         fit_label="fit_bad",
         init_psi=bad_psi_guess,
@@ -143,7 +143,7 @@ def test_nls_fitter_psi_init(basic_sim_config):
 
     # --- Fit WITH smart init (expected to succeed) ---
     fit_smart_guess = dff.fit(
-        main_label="test_sim",
+        label="test_sim",
         method="nls",
         fit_label="fit_smart",
         init_psi=bad_psi_guess,
@@ -174,7 +174,7 @@ def test_ekf_fitter_converges_on_static_signal(basic_sim_config):
         label="test_sim", n_seconds=50e-3, mode="snr", snr_db=80
     )  # A little noise helps EKF
 
-    fit_obj = dff.fit(main_label="test_sim", method="ekf",
+    fit_obj = dff.fit(label="test_sim", method="ekf",
                       fit_config={
                           "P0_diag": [1.0] * 5,
                           "Q_diag": [1e-6] * 5,
@@ -201,7 +201,7 @@ def test_iekf_fitter_converges_on_static_signal(basic_sim_config):
         label="test_sim", n_seconds=50e-3, mode="snr", snr_db=80
     )  # A little noise helps EKF
 
-    fit_obj = dff.fit(main_label="test_sim", method="iekf",
+    fit_obj = dff.fit(label="test_sim", method="iekf",
                       fit_config={
                           "P0_diag": [1.0] * 10,
                           "Q_diag": [1e-9] * 10,
@@ -230,7 +230,7 @@ def test_ekf_tracks_slowly_varying_phase(basic_sim_config):
 
     dff.add_sim(basic_sim_config)
     dff.simulate(label="test_sim", n_seconds=n_seconds, mode="asd", trial_num=123)
-    fit_obj = dff.fit(main_label="test_sim", method="ekf",
+    fit_obj = dff.fit(label="test_sim", method="ekf",
                       fit_config={
                           "P0_diag": [1.0] * 5,
                           "Q_diag": [1e-6] * 5,
@@ -268,7 +268,7 @@ def test_iekf_tracks_slowly_varying_phase(basic_sim_config):
 
     dff.add_sim(basic_sim_config)
     dff.simulate(label="test_sim", n_seconds=n_seconds, mode="asd", trial_num=123)
-    fit_obj = dff.fit(main_label="test_sim", method="iekf", 
+    fit_obj = dff.fit(label="test_sim", method="iekf", 
                       fit_config={
                           "P0_diag": [1.0] * 10,
                           "Q_diag": [1e-6] * 10,

@@ -185,7 +185,7 @@ def _run_single_trial(job_packet: Tuple) -> Dict[str, Any]:
         fitter_args.update(
             {
                 "method": analysis["fitter_method"],
-                "main_label": "main",  # Use the local label
+                "label": "main",  # Use the local label
             }
         )
         if analysis["fitter_method"] in ["nls", "ekf"]:

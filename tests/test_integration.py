@@ -76,7 +76,7 @@ def test_full_workflow_noiseless_static(basic_sim_config):
 
     fit_label = "integration_test_fit"
     fit_obj = dff.fit(
-        main_label=sim_label,
+        label=sim_label,
         method="nls",
         fit_label=fit_label,
         n_cycles=10,
@@ -110,7 +110,7 @@ def test_workflow_with_realistic_noise(basic_sim_config):
     dff.add_sim(sim_config)
     dff.simulate(label="test_sim", n_seconds=0.2, mode="asd", trial_num=42)
 
-    fit_obj = dff.fit(main_label="test_sim", method="nls", parallel=False)
+    fit_obj = dff.fit(label="test_sim", method="nls", parallel=False)
 
     assert fit_obj is not None
     results_df = dff.fits_df[fit_obj.label]
@@ -133,7 +133,7 @@ def test_ekf_integration_on_dynamic_signal(basic_sim_config):
     dff.add_sim(sim_config)
     dff.simulate(label="test_sim", n_seconds=2.0, mode="asd", trial_num=101)
 
-    fit_obj = dff.fit(main_label="test_sim", method="ekf")
+    fit_obj = dff.fit(label="test_sim", method="ekf")
 
     assert fit_obj is not None
 

@@ -136,7 +136,7 @@ if __name__ == "__main__":
     # --- 1. Sequential Timing ---
     print(f"Running SEQUENTIAL benchmark ({N_REPETITIONS} repetitions)...")
     seq_fit_func = lambda: dff.fit(
-        main_label=data_label,
+        label=data_label,
         method='nls',
         n=N_CYCLES_PER_BUFFER,
         n_harmonics=N_HARMONICS,
@@ -149,7 +149,7 @@ if __name__ == "__main__":
     n_cores = os.cpu_count()
     print(f"Running PARALLEL benchmark on {n_cores} cores ({N_REPETITIONS} repetitions)...")
     par_fit_func = lambda: dff.fit(
-        main_label=data_label,
+        label=data_label,
         method='nls',
         n=N_CYCLES_PER_BUFFER,
         n_harmonics=N_HARMONICS,

@@ -104,7 +104,7 @@ def test_fit_creates_fitdata(basic_sim_config):
 
     fit_label = "test_fit"
     fit_obj = dff.fit(
-        main_label="test_sim", method="nls", fit_label=fit_label, parallel=False
+        label="test_sim", method="nls", fit_label=fit_label, parallel=False
     )
 
     assert fit_label in dff.fits
@@ -119,15 +119,15 @@ def test_create_witness_channel(basic_sim_config):
     Tests the helper function for creating a witness channel.
     """
     dff = DeepFrame()
-    main_label = "main_channel"
+    label = "main_channel"
     witness_label = "witness_channel"
 
-    basic_sim_config.label = main_label
+    basic_sim_config.label = label
     dff.add_sim(basic_sim_config)
 
     target_m_witness = 0.5
     dff.create_witness_channel(
-        main_channel_label=main_label,
+        main_channel_label=label,
         witness_channel_label=witness_label,
         m_witness=target_m_witness,
     )
@@ -260,4 +260,4 @@ def test_fit_init_raises_error_for_short_data(basic_sim_config):
 
     # Now try to fit with n=20, which is impossible
     with pytest.raises(ValueError):
-        dff.fit(main_label="test_sim", n=20)
+        dff.fit(label="test_sim", n=20)

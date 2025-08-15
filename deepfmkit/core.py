@@ -455,6 +455,8 @@ class DeepFrame:
             fit.psi = data[:, 6 * k + 4]
             fit.dc = data[:, 6 * k + 5]
             fit.time = np.arange(0, fit.n_buf / self.fs, 1.0 / self.fs)
+            if len(fit.time) >= 2:
+                fit.time = fit.time + (fit.time[1]-fit.time[0])
             fit.label = labels[k]
             self.fits[labels[k]] = fit
 
@@ -592,7 +594,7 @@ class DeepFrame:
 
     def fit(
         self,
-        main_label: str,
+        label: str,
         method: str = "nls",
         fit_label: Optional[str] = None,
         fit_config: Optional[Dict[str, Any]] = None,
@@ -606,7 +608,7 @@ class DeepFrame:
 
         Parameters
         ----------
-        main_label : str
+        label : str
             The label of the `RawData` object in `self.raws` to be fit.
         method : str, optional
             The fitting algorithm to use. Available methods: 'nls', 'ekf', 'iekf'.
@@ -634,10 +636,10 @@ class DeepFrame:
         -----
         # Recommended way to provide custom tuning for a fitter:
         my_config = {'Q_diag': [1e-3]*10, 'P0_diag': [0.1]*10}
-        dff.fit(main_label, method='iekf', fit_config=my_config)
+        dff.fit(label, method='iekf', fit_config=my_config)
 
         # Alternative way (less explicit, for backward compatibility):
-        dff.fit(main_label, method='iekf', Q_diag=[1e-3]*10, P0_diag=[0.1]*10)
+        dff.fit(label, method='iekf', Q_diag=[1e-3]*10, P0_diag=[0.1]*10)
         """
         # --- 1. Select the Fitter class ---
         fitter_map = {
@@ -651,23 +653,23 @@ class DeepFrame:
             )
         FitterClass = fitter_map[method]
         logging.debug(
-            f"Dispatching to {FitterClass.__name__} for label '{main_label}'."
+            f"Dispatching to {FitterClass.__name__} for label '{label}'."
         )
 
         # --- 2. Prepare data and config ---
-        if main_label not in self.raws:
+        if label not in self.raws:
             raise KeyError(
-                f"Invalid raw data label: '{main_label}' not found in self.raws."
+                f"Invalid raw data label: '{label}' not found in self.raws."
             )
-        main_raw = self.raws[main_label]
+        main_raw = self.raws[label]
 
         if fit_label is None:
-            fit_label = f"{main_label}_{method}"
+            fit_label = f"{label}_{method}"
 
         # Get 'n_cycles' for the fit config, which is common to all fitters
         n_cycles = kwargs.pop("n_cycles", None) # Use pop to remove it from kwargs
         if n_cycles is None:
-            sim_obj = self.sims.get(main_raw.sim.label if main_raw.sim else main_label)
+            sim_obj = self.sims.get(main_raw.sim.label if main_raw.sim else label)
             n_cycles = sim_obj.fit_n if sim_obj else 20
 
         # --- 3. Build the Fitter Configuration Dictionary ---
@@ -688,7 +690,7 @@ class DeepFrame:
         # --- 4. Instantiate and run the Fitter ---
         fitter = FitterClass(config_for_fitter)
         
-        R, fs, n_buf = self._fit_init(main_label, n_cycles)
+        R, fs, n_buf = self._fit_init(label, n_cycles)
         if (
             hasattr(main_raw, "phi_sim")
             and main_raw.phi_sim is not None
@@ -702,7 +704,7 @@ class DeepFrame:
         # --- 5. Create and store the FitData ---
         if results_df is None or results_df.empty:
             logging.warning(
-                f"{FitterClass.__name__} returned no results for '{main_label}'."
+                f"{FitterClass.__name__} returned no results for '{label}'."
             )
             return None
 
@@ -717,7 +719,7 @@ class DeepFrame:
 
         fit_obj = self._create_fit_object_from_df(
             fit_label,
-            main_label,
+            label,
             n_cycles,
             R,
             fs,
