@@ -240,7 +240,7 @@ experiment.add_analysis(
     fitter_method='nls',
     result_cols=['amp', 'm', 'phi', 'psi', 'ssq'], # Parameters I want to collect
     fitter_kwargs={
-        'n': 20,       # 20 modulation cycles per fit buffer
+        'n_cycles': 20,      # 20 modulation cycles per fit buffer
         'n_harmonics': 10,   # Use this many harmonics for NLS
     }
 )
