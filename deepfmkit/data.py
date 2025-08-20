@@ -39,7 +39,7 @@ from deepfmkit.fit import DEFAULT_GUESS, DEFAULT_NDATA
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Optional, Any, Tuple, TextIO
+from typing import Optional, Any, Tuple, TextIO, Union
 import gzip
 import io
 from pathlib import Path
@@ -49,7 +49,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def open_txt_maybe_gzip(path: str | Path, *, encoding: str = "utf-8") -> TextIO:
+def open_txt_maybe_gzip(path: Union[str, Path], *, encoding: str = "utf-8") -> TextIO:
     """Open a text file for reading, optionally gzipped.
     """
     p = Path(path)
@@ -58,7 +58,12 @@ def open_txt_maybe_gzip(path: str | Path, *, encoding: str = "utf-8") -> TextIO:
         return io.TextIOWrapper(gzip.open(p, "rb"), encoding=encoding)
     return p.open("r", encoding=encoding)
 
-def _open_txt_for_write(filename: str | Path, *, compress: bool | None, encoding: str = "utf-8"):
+def _open_txt_for_write(
+    filename: Union[str, Path],
+    *,
+    compress: Optional[bool],
+    encoding: str = "utf-8"
+) -> Tuple[TextIO, str]:
     """Open a text file for writing, optionally gzipped.
 
     Rules:
@@ -169,7 +174,7 @@ Number of Samples:      {len(self.data)}
 Duration:               {len(self.data) / self.f_samp if self.f_samp else "N/A"} s
 """)
 
-    def to_txt(self, filename: str, *, compress: bool | None = None, encoding: str = "utf-8") -> str:
+    def to_txt(self, filename: str, *, compress: Optional[bool] = None, encoding: str = "utf-8") -> str:
         """
         Save the raw data to DFMI text format.
 
@@ -384,7 +389,7 @@ Fit Data Rate (fs):           {self.fs:.3f} Hz
 Number of Fit Points:         {self.n_buf:d}
 """)
 
-    def to_txt(self, filename: str, *, compress: bool | None = None, encoding: str = "utf-8") -> str:
+    def to_txt(self, filename: str, *, compress: Optional[bool] = None, encoding: str = "utf-8") -> str:
         """
         Save the fit results to DFMSWPM 'fit_data' text format.
 
