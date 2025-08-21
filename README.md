@@ -1,4 +1,5 @@
 # DeepFMKit: A Toolkit for Deep Frequency Modulation Interferometry
+[Miguel Dovale](https://orcid.org/0000-0002-6300-5226)
 
 **DeepFMKit** is a high-performance Python framework for the end-to-end simulation, processing, and analysis of data from Deep Frequency Modulation Interferometry (DFMI) experiments. It provides a complete computational laboratory for researchers and engineers to design virtual experiments, study systematic errors, and develop and benchmark novel data analysis techniques.
 
@@ -17,6 +18,8 @@ The novelty of DeepFMKit lies in its integrated, object-oriented approach. It co
     *   **EKF Fitter:** A time-domain Extended Kalman Filter (EKF) for real-time state tracking and analysis of dynamic systems.
 *   **High-Throughput Experimentation:** A declarative framework for defining and running large-scale, parallelized parameter sweeps and Monte Carlo simulations to systematically characterize system performance.
 *   **Data Handling & Visualization:** A suite of tools for loading/saving data, managing experimental configurations, and plotting results.
+
+---
 
 ## Getting Started
 
@@ -54,6 +57,7 @@ pip install git+https://github.com/mdovale/DeepFMKit.git
    pip install -r requirements.txt
    ```
 
+---
 
 ## Quick Start: A Complete Workflow
 
@@ -86,6 +90,8 @@ df.fit("ch0")
 axes = df.plot(which=['phi', 'm', 'ssq'])
 plt.show()
 ```
+
+---
 
 ## Advanced Usage
 
@@ -251,6 +257,35 @@ experiment.results = experiment.run()
 print("Experiment completed.")
 ```
 
+---
+
+## References and Acknowledgements
+
+1. **Colored Noise Generation**  
+   - Plaszczynski, S. (2007). *Generating long streams of 1/f^α noise*. Fluctuation and Noise Letters. [doi:10.1142/S0219477507003635](https://doi.org/10.1142/S0219477507003635)  
+   - Provides the stable cascade-of-filters method used in SpecKit.
+   - Numba-optimized version of original code by [Jan Waldmann](https://github.com/janwaldmann/pyplnoise)
+
+2. **High-order Lagrange Interpolation**
+   - [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8429119.svg)](https://doi.org/10.5281/zenodo.8429119)
+   - `dsp.timeshift` and `dsp.lagrange_taps` adopted from the PyTDI project. Credit to: [Staab, Martin](https://orcid.org/0000-0001-5036-6586), [Bayle, Jean-Baptiste](https://orcid.org/0000-0001-7629-6555), [Hartwig, Olaf](https://orcid.org/0000-0003-2670-3815)
+
+---
+
+## License
+
+This project is licensed under the **BSD 3-Clause License**.  
+See the LICENSE file for details.
+
+---
+
+## Contributing
+
+Contributions are welcome!  
+If you have a bug report, feature request, or suggestion, please open an issue on the GitHub repository.
+
+---
+
 ## Citing DeepFMKit
 
 If you use DeepFMKit in your research, please cite this paper:
@@ -267,6 +302,3 @@ If you use DeepFMKit in your research, please cite this paper:
   copyright = {arXiv.org perpetual,  non-exclusive license}
 }
 ```
-
-## License
-This project is licensed under the BSD 3-Clause License - see the LICENSE file for details.
