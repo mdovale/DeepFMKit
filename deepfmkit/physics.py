@@ -1283,7 +1283,6 @@ class SignalGenerator:
 
             # --- Analytical Path 2: Second Harmonic Distortion ---
             elif laser.waveform_func is waveforms.shd:
-                # This logic is taken directly from the original, high-accuracy engine.
                 kwargs = laser.waveform_kwargs
                 dist_amp = kwargs.get("distortion_amp", 0.0)
                 dist_phase = kwargs.get("distortion_phase", 0.0)
@@ -1304,7 +1303,7 @@ class SignalGenerator:
                 )
                 t_phase_os = omega_mod * time_axis_os + laser.psi
 
-                # Normalize frequency shape
+                # Normalize frequency shape.
                 fm_shape_os = laser.waveform_func(t_phase_os, **laser.waveform_kwargs)
                 fm_shape_ac_os = fm_shape_os - np.mean(fm_shape_os)
                 fund_amp_in_shape = np.mean(fm_shape_ac_os * np.cos(t_phase_os)) * 2
@@ -1318,7 +1317,7 @@ class SignalGenerator:
                     fm_shape_normalized_os, x=t_phase_os, initial=0
                 )
 
-                # Detrend to enforce periodicity
+                # Detrend to enforce periodicity.
                 total_phase_span_os = t_phase_os[-1] - t_phase_os[0]
                 if total_phase_span_os > 0:
                     endpoint_error = phi_shape_unscaled_os[-1]
@@ -1332,7 +1331,7 @@ class SignalGenerator:
                     phi_shape_periodic_os
                 )
 
-                # Use anti-aliasing downsampler for maximum accuracy and integrity.
+                # Anti-aliasing downsampler for maximum integrity.
                 phi_mod_shape = decimate(
                     phi_mod_shape_ac_os,
                     oversampling_factor,
@@ -1348,7 +1347,7 @@ class SignalGenerator:
                 # Apply the physical amplitude
                 phi_mod_unscaled_physical = phi_mod_amp_fundamental * phi_mod_shape
 
-            # C. Inject modulation amplitude (df) noise. This applies to all paths.
+            # C. Inject modulation amplitude (df) noise.
             if laser.df != 0:
                 df_noise_factor = 1 + (noise_arrays.get("df", 0.0) / laser.df)
                 phi_mod_waveform = phi_mod_unscaled_physical * df_noise_factor

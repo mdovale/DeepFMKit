@@ -591,7 +591,7 @@ class IntegratedEKF(BaseFitter):
             "phi": results[:, 0],   "phi_dot": results[:, 1],
             "psi": results[:, 2],   "psi_dot": results[:, 3],
             "m":   results[:, 4],   "m_dot": results[:, 5],
-            "amp":   results[:, 6], "amp_dot": results[:, 7], # AC amplitude and its rate
+            "amp": results[:, 6],   "amp_dot": results[:, 7], # AC amplitude and its rate
             "dc":  results[:, 8],   "dc_dot":  results[:, 9], # DC offset and its rate
             "ssq": np.zeros(n_buf),
             "fitok": np.ones(n_buf, dtype=int),
