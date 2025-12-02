@@ -44,11 +44,35 @@ def generate_test_signal(
     duration: float,
     m1: float = 5.0,
     m2: float = 0.5,
-    im_depth: float = 0.1,
-    im_freq: float = 0.1,
 ):
     """
-    Toy signal for sanity-checking the API
+    Generate a synthetic interferometric signal for testing reconstruction algorithms.
+
+    Simulates a signal of the form:
+    V(t) = cos(phi(t))
+    where phi(t) contains harmonic modulation.
+
+    Parameters
+    ----------
+    fs : float
+        Sampling frequency in Hz.
+    fm : float
+        Fundamental modulation frequency in Hz.
+    duration : float
+        Signal duration in seconds.
+    m1 : float, optional
+        Modulation index for the fundamental frequency. Default is 5.0.
+    m2 : float, optional
+        Modulation index for the second harmonic. Default is 0.5.
+
+    Returns
+    -------
+    t : np.ndarray
+        Time vector.
+    phi_mod : np.ndarray
+        The true phase modulation waveform.
+    v_meas : np.ndarray
+        The simulated voltage signal with intensity modulation applied.
     """
     t = np.arange(duration*fs)/fs
     omega = 2 * np.pi * fm
@@ -59,9 +83,35 @@ def generate_test_signal(
 
     return t, phi_mod, v_meas
 
-def butter_lowpass_filter(data: np.ndarray, cutoff: float, fs: float, order: int = 2) -> np.ndarray:
+def butter_lowpass_filter(
+    data: np.ndarray, 
+    cutoff: float, 
+    fs: float, 
+    order: int = 2
+) -> np.ndarray:
     """
-    Zero-phase Butterworth low-pass filter.
+    Apply a zero-phase Butterworth low-pass filter to the input data.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Input signal (1D).
+    cutoff : float
+        Cutoff frequency in Hz.
+    fs : float
+        Sampling frequency in Hz.
+    order : int, optional
+        Order of the filter. Default is 2.
+
+    Returns
+    -------
+    y : np.ndarray
+        Filtered signal.
+
+    Raises
+    ------
+    ValueError
+        If cutoff frequency is greater than or equal to the Nyquist frequency.
     """
     nyquist = 0.5 * fs
     normal_cutoff = cutoff / nyquist
@@ -80,46 +130,25 @@ def correct_intensity_modulation(
     fm: float
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Intensity modulation correction.
-    
-    Removes the additive (I0) and multiplicative (Iv) intensity modulations
-    that often accompany laser current modulation.
-
-    Parameters
-    ----------
-    v_meas : np.ndarray
-        Raw photodetector voltage signal.
-    fs : float
-        Sampling frequency (Hz).
-    fm : float
-        Modulation frequency (Hz).
-
-    Returns
-    -------
-    v_corrected : np.ndarray
-        The normalized interferometric signal (approx. cos(phi)).
-    I0 : np.ndarray
-        The estimated additive intensity term.
-    Iv : np.ndarray
-        The estimated multiplicative envelope term.
+    TODO Implement correct_intensity_modulation
     """
     raise NotImplementedError
 
-def hilbert_transform(fx):
+def hilbert_transform(fx: np.ndarray) -> np.ndarray:
     """
-    Approximate the Hilbert transform of a real-valued function f(x)
-    sampled on a uniform grid, using only NumPy.
+    Compute the Hilbert transform of a real-valued signal using FFT.
+
+    H[f](t) = Im( Analytic_Signal(f(t)) )
 
     Parameters
     ----------
-    fx : array_like
-        1D array of real samples of f(x) on an equally spaced grid.
+    fx : np.ndarray
+        1D array of real-valued samples.
 
     Returns
     -------
-    Hf : ndarray
-        1D array with the Hilbert transform H[f](x) evaluated at the
-        same grid points.
+    Hf : np.ndarray
+        The Hilbert transform of the input.
     """
     fx = np.asarray(fx, dtype=float)
     N = fx.shape[0]
@@ -146,93 +175,123 @@ def hilbert_transform(fx):
     # Imaginary part is the Hilbert transform
     return np.imag(analytic)
 
-def hilbert_pv_integral(fx, x):
+def hilbert_pv_integral(fx: np.ndarray, x: np.ndarray) -> np.ndarray:
     """
-    Approximate the Hilbert transform using the principal-value
-    integral on a finite, uniformly spaced grid.
-
-    Hf(x_j) ≈ (Δx/π) sum_{k ≠ j} f(x_k) / (x_j - x_k)
+    Approximate Hilbert transform via Principal Value (PV) integral on a grid.
+    
+    Warning: This implementation is O(N^2) and is significantly slower 
+    than FFT-based methods. Intended for educational verification.
 
     Parameters
     ----------
-    fx : array_like
-        Real-valued samples f(x_k).
-    x : array_like
-        Sample locations x_k, assumed 1D and uniformly spaced.
+    fx : np.ndarray
+        Real-valued samples f(x).
+    x : np.ndarray
+        Uniformly spaced grid points.
 
     Returns
     -------
-    Hf : ndarray
-        Approximate Hilbert transform Hf(x_j) at the same grid points.
+    Hf : np.ndarray
+        Approximate Hilbert transform.
+    
+    Raises
+    ------
+    ValueError
+        If inputs shape mismatch or x is not uniformly spaced.
     """
     fx = np.asarray(fx, dtype=float)
     x = np.asarray(x, dtype=float)
 
     if fx.shape != x.shape:
-        raise ValueError("fx and x must have the same shape")
+        raise ValueError(f"Shape mismatch: fx {fx.shape}, x {x.shape}")
 
-    # Check uniform spacing (not strictly necessary but safer)
-    dx = np.diff(x)
-    if not np.allclose(dx, dx[0]):
-        raise ValueError("x must be uniformly spaced")
+    dx_arr = np.diff(x)
+    if not np.allclose(dx_arr, dx_arr[0], rtol=1e-5):
+        raise ValueError("Grid x must be uniformly spaced.")
 
-    dx = dx[0]
-    N = x.size
-
-    # Build matrix of differences x_j - x_k
-    X = x[:, None]      # shape (N,1)
-    Y = x[None, :]      # shape (1,N)
-    denom = X - Y       # shape (N,N)
-
-    # Implement principal value: ignore k=j term by making it infinite
+    dx = dx_arr[0]
+    
+    # Broadcasting to create difference matrix (x_j - x_k)
+    # Memory Warning: creates an N x N array.
+    denom = x[:, None] - x[None, :]
+    
+    # PV: Exclude diagonal (j=k) by treating as infinity (result -> 0)
     np.fill_diagonal(denom, np.inf)
 
-    # Compute PV sum: (dx/pi) * sum_k f(x_k)/(x_j - x_k)
+    # Discrete Hilbert Transform Summation
     Hf = (dx / np.pi) * np.sum(fx[None, :] / denom, axis=1)
 
     return Hf
 
-def identify_local_minima(phi: np.ndarray) -> np.ndarray:
+def identify_local_minima(data: np.ndarray) -> np.ndarray:
     """
+    Find indices of local minima in a 1D array.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Input 1D array.
+
+    Returns
+    -------
+    indices : np.ndarray
+        Array of indices where local minima occur.
     """
-    return sp.signal.argrelextrema(phi, np.less)[0]
+    return sp.signal.argrelextrema(data, np.less)[0]
 
-def stitch_segments(phi: np.ndarray, q: np.ndarray) -> Tuple[np.ndarray, slice]:
+def stitch_segments(phi: np.ndarray, q: np.ndarray) -> np.ndarray:
     """
-    Implement
+    Reconstruct the full phase waveform by stitching Hilbert segments.
+    
+    This function implements the "Shmagun" stitching logic where phase segments
+    between turning points (q) are flipped and offset to recover directionality of the
+    reconstructed effective modulation wavefront.
 
-      Φ_reconstr(t_k) =
-        Φ_H(t_k) - Φ_H(t_{q0})                          for q0 ≤ k < q1
-        Φ_H(t_k) - Φ_H(t_{qj}) + Φ_reconstr(t_{qj-1})   for qj ≤ k < q_{j+1}, j even
-       -Φ_H(t_k) + Φ_H(t_{qj}) + Φ_reconstr(t_{qj-1})   for qj ≤ k < q_{j+1}, j odd
+    Parameters
+    ----------
+    phi : np.ndarray
+        The unwrapped Hilbert phase (usually from an analytic signal).
+    q : np.ndarray
+        Indices of the turning points (local minima of phase derivative).
 
-    where phi[k] = Φ_H(t_k) and q[j] = q_j.
+    Returns
+    -------
+    phi_rec : np.ndarray
+        The reconstructed continuous waveform.
+        
+    Raises
+    ------
+    ValueError
+        If fewer than 2 turning points are provided.
     """
-
     phi = np.asarray(phi)
     q = np.asarray(q, dtype=int)
 
     if q.size < 2:
-        raise ValueError("q must contain at least q0 and q1")
+        raise ValueError("At least 2 turning points (q) are required for stitching.")
 
     phi_rec = np.zeros_like(phi, dtype=float)
 
-    # First interval: q0 ≤ k < q1
+    # 1. Initialize first interval: q0 <= k < q1
     q0, q1 = q[0], q[1]
     phi_rec[q0:q1] = phi[q0:q1] - phi[q0]
 
-    # Remaining intervals: qj ≤ k < q_{j+1}, j = 1, 2, ...
+    # 2. Iterative stitching
+    # Logic: Align the start of the current segment with the end of the previous one.
+    # The sign flips every segment (even/odd) to counteract fold-over.
     for j in range(1, len(q) - 1):
         start, stop = q[j], q[j + 1]
+        prev_val = phi_rec[start - 1]
+        
+        curr_segment = phi[start:stop]
+        anchor = phi[start]
 
-        if j % 2 == 0:  # j even
-            phi_rec[start:stop] = (
-                phi[start:stop] - phi[start] + phi_rec[start - 1]
-            )
-        else:           # j odd
-            phi_rec[start:stop] = (
-                -phi[start:stop] + phi[start] + phi_rec[start - 1]
-            )
+        if j % 2 == 0:
+            # Even segment: preserve slope direction
+            phi_rec[start:stop] = (curr_segment - anchor) + prev_val
+        else:
+            # Odd segment: invert slope direction
+            phi_rec[start:stop] = (-curr_segment + anchor) + prev_val
 
     return phi_rec
 
@@ -241,130 +300,161 @@ def reconstruct_waveform(
     fs: float,
     fm: float,
     correct_intensity: bool = False,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[int]]:
+    lp_cutoff_factor: float = 5.0,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Main API function for Shmagun Waveform Reconstruction.
+    Reconstruct phase waveform from interferometric fringe signal.
+
+    Algorithm Pipeline:
+    1. (Optional) Intensity correction.
+    2. Hilbert transform to extract wrapped phase.
+    3. Differentiation of phase.
+    4. Identification of turning points (where d_phase ~ 0).
+    5. Segment stitching to unwrap the high-modulation waveform.
 
     Parameters
     ----------
     v_meas : np.ndarray
-        Input voltage array from witness interferometer.
+        Measured voltage signal.
     fs : float
         Sampling rate (Hz).
     fm : float
         Nominal modulation frequency (Hz).
-    correct_intensity : bool
-        Whether to apply IM correction. Defaults to False.
+    correct_intensity : bool, optional
+        If True, applies AM/DC correction before processing. Default False.
+    lp_cutoff_factor : float, optional
+        Multiplier for fm to determine low-pass cutoff for the phase derivative.
+        Default is 5.0 (cutoff = 5 * fm).
 
     Returns
     -------
-    phi_rec : np.ndarray
-        The reconstructed effective phase modulation waveform.
-    q : list of int
-        Indices of stitch locations.
+    phi_rec_full : np.ndarray
+        Reconstructed phase (zeros outside the stitching range).
+    phi_hilbert_wrapped : np.ndarray
+        Raw phase from Hilbert transform [-pi, pi].
+    phi_hilbert : np.ndarray
+        Standard unwrapped Hilbert phase.
+    dphi : np.ndarray
+        Derivative of the Hilbert phase.
+    dphi_filtered : np.ndarray
+        Filtered derivative used for turning point detection.
+    q : np.ndarray
+        Indices of detected turning points.
+
+    Raises
+    ------
+    RuntimeError
+        If insufficient turning points are found to reconstruct the signal.
     """
-    # Pre-processing
+    # 1. Pre-processing
     if correct_intensity:
         v_proc, _, _ = correct_intensity_modulation(v_meas, fs, fm)
     else:
         v_proc = v_meas.copy()
 
-    # Hilbert Transform + Phase Extraction
-    phi_hilbert_wrapped = np.angle(sp.signal.hilbert(v_proc))
+    # 2. Hilbert Transform + Phase Extraction
+    analytic_sig = sp.signal.hilbert(v_proc)
+    phi_hilbert_wrapped = np.angle(analytic_sig)
     phi_hilbert = np.unwrap(phi_hilbert_wrapped, period=np.pi)
 
-    # Calculate symmetric discrete first derivative of the phase signal
-    dphi = 0.5 * (np.roll(phi_hilbert, -1) - np.roll(phi_hilbert, 1))
-    dphi[0] = dphi[-1] = 0
+    # 3. Calculate symmetric discrete first derivative
+    # (Central difference)
+    dphi = np.zeros_like(phi_hilbert)
+    dphi[1:-1] = 0.5 * (phi_hilbert[2:] - phi_hilbert[:-2])
+    # Boundary handling (replicate neighbors)
+    dphi[0] = dphi[1]
+    dphi[-1] = dphi[-2]
 
-    # Low-pass filter of phase derivative
+    # 4. Low-pass filter the derivative to find robust minima
     dphi_filtered = butter_lowpass_filter(
-        data=dphi, cutoff=5*fm, fs=fs, order=2
+        data=dphi, 
+        cutoff=lp_cutoff_factor * fm, 
+        fs=fs, 
+        order=2
     )
 
-    # Turning points
+    # 5. Identify Turning Points (Local Minima of Derivative)
     q = identify_local_minima(dphi_filtered)
 
     if len(q) < 2:
-        print("Warning: insufficient turning points.")
-        exit()
+        raise RuntimeError(
+            "Insufficient turning points detected. Check signal quality, "
+            "modulation index, or filter cutoff settings."
+        )
 
-    # Segment stitching
+    # 6. Stitch Segments
     phi_rec_full = stitch_segments(phi_hilbert, q)
 
-    # Return full reconstruction and region indices
     return phi_rec_full, phi_hilbert_wrapped, phi_hilbert, dphi, dphi_filtered, q
 
 
 if __name__ == "__main__":
-    fs = 200e4         # sampling rate
-    fm = 1e3           # modulation frequency
-    duration = 5/fm   # 50 periods
+    # --- Integration Test / Demo ---
+    
+    # Simulation Parameters
+    FS = 200e4          # 2 MHz sampling
+    FM = 1e3            # 1 kHz modulation
+    DURATION = 5.0 / FM # 5 periods
+    
+    # Generate Signal with Intensity Modulation artifacts
+    t, phi_true, v_meas = generate_test_signal(
+        FS, FM, DURATION, 
+        m1=50.0, m2=0.0, 
+    )
 
-    t, phi_mod, v_meas = generate_test_signal(fs, fm, duration, m1=50.0, m2=0.0, im_depth=0.0, im_freq=0.0)
+    print("Processing signal...")
+    try:
+        # Run Reconstruction (with IM correction enabled)
+        phi_rec_full, _, _, dphi, dphi_filt, q = reconstruct_waveform(
+            v_meas, FS, FM, correct_intensity=False
+        )
 
-    # Run Shmagun-style reconstruction
-    phi_rec_full, phi_hilbert_wrapped, phi_hilbert, dphi, dphi_filtered, q = reconstruct_waveform(v_meas, fs, fm, correct_intensity=False)
+        # Evaluate performance on the valid stitched region
+        q_start, q_end = q[0], q[-1]
+        
+        # Slicing
+        phi_rec_slice = phi_rec_full[q_start:q_end]
+        phi_true_slice = phi_true[q_start:q_end]
+        
+        # Remove DC offsets for comparison
+        phi_rec_centered = phi_rec_slice - np.mean(phi_rec_slice)
+        phi_true_centered = phi_true_slice - np.mean(phi_true_slice)
+        
+        # Determine global sign ambiguity (common in interferometry)
+        corr_pos = np.corrcoef(phi_rec_centered, phi_true_centered)[0, 1]
+        sign = np.sign(corr_pos)
+        
+        phi_final = sign * phi_rec_centered
+        rmse = np.sqrt(np.mean((phi_final - phi_true_centered)**2))
 
-    q0 = q[0]
-    qlast = q[-1]
+        print(f"Reconstruction Interval: Samples {q_start} to {q_end}")
+        print(f"Correlation: {abs(corr_pos):.5f}")
+        print(f"RMSE: {rmse:.4f} rad")
 
-    # Compare on matching central slice
-    t_slice = t[q0:qlast]
-    phi_rec_slice = phi_rec_full[q0:qlast]
-    phi_true_slice = phi_mod[q0:qlast]
-    n_rec = len(phi_true_slice)
+        # Visualization
+        fig, axes = plt.subplots(4, 1, figsize=(10, 12), sharex=True)
+        
+        axes[0].set_title("Input Signal (with IM)")
+        axes[0].plot(t, v_meas, label='Measured V')
+        axes[0].legend()
+        
+        axes[1].set_title("Phase Derivative & Turning Points")
+        axes[1].plot(t, dphi, color='gray', alpha=0.5, label='Raw dPhi')
+        axes[1].plot(t, dphi_filt, color='blue', label='Filtered dPhi')
+        axes[1].plot(t[q], dphi_filt[q], 'ro', label='Turning Points')
+        axes[1].legend()
 
-    phi_rec0 = phi_rec_slice - np.mean(phi_rec_slice)
-    phi_true0 = phi_true_slice - np.mean(phi_true_slice)
+        axes[2].set_title("Reconstructed vs True Waveform")
+        axes[2].plot(t[q_start:q_end], phi_true_centered, 'k', label='True')
+        axes[2].plot(t[q_start:q_end], phi_final, 'r--', label='Reconstructed')
+        axes[2].legend()
 
-    # account for possible global sign ambiguity
-    err_plus = np.linalg.norm(phi_rec0 - phi_true0) / np.sqrt(n_rec)
-    err_minus = np.linalg.norm(phi_rec0 + phi_true0) / np.sqrt(n_rec)
-    if err_minus < err_plus:
-        sign = -1.0
-        err = err_minus
-    else:
-        sign = 1.0
-        err = err_plus
+        axes[3].set_title("Error Residual")
+        axes[3].plot(t[q_start:q_end], phi_final - phi_true_centered, color='orange')
+        axes[3].set_xlabel("Time (s)")
 
-    corr = np.corrcoef(sign * phi_rec0, phi_true0)[0, 1]
+        plt.tight_layout()
+        plt.show()
 
-    print(f"Reconstruction length: {n_rec} samples")
-    print(f"RMS error (best sign): {err:.3f} rad")
-    print(f"Correlation (best sign): {corr:.8f}")
-    print("First 10 samples of phi_true_slice:")
-    print(phi_true_slice[:10])
-    print("First 10 samples of phi_rec (up to sign/offset):")
-    print(phi_rec_slice[:10])
-
-    fig, ax = plt.subplots(figsize=(20,3), dpi=150)
-    ax.set_title('Signal')
-    ax.plot(t, v_meas)
-    ax.plot(t, np.real(sp.signal.hilbert(v_meas)), ls='--')
-    # plt.show()
-
-    fig, ax = plt.subplots(figsize=(20,3), dpi=150)
-    ax.set_title('Hilbert transform of signal')
-    ax.plot(t, np.imag(sp.signal.hilbert(v_meas)))
-    ax.plot(t, hilbert_transform(v_meas), ls='--')
-    # plt.show()
-
-
-    fig, ax = plt.subplots(figsize=(20,3), dpi=150)
-    ax.set_title('Phase extraction and derivative')
-    ax.plot(t, phi_hilbert_wrapped)
-    ax.plot(t, phi_hilbert)
-    ax.plot(t, dphi)
-    ax.plot(t, dphi_filtered)
-    for idx in q:
-        ax.axvline(t[idx], c='k', ls='--')
-    # plt.show()
-
-    fig, ax = plt.subplots(figsize=(20,3), dpi=150)
-    ax.set_title('Wavefront reconstruction')
-    ax.plot(t_slice, phi_true0)
-    ax.plot(t_slice, -phi_rec0, ls='--')
-    plt.show()
-
-
+    except Exception as e:
+        print(f"Reconstruction failed: {e}")
