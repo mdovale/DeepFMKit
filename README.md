@@ -292,13 +292,15 @@ If you use DeepFMKit in your research, please cite this paper:
 
 ```bibtex
 @article{Dovale2025,
-  doi = {10.48550/ARXIV.2507.23183},
-  url = {https://arxiv.org/abs/2507.23183},
-  author = {Dovale-\'Alvarez,  Miguel},
-  keywords = {Optics (physics.optics),  Applied Physics (physics.app-ph),  Instrumentation and Detectors (physics.ins-det),  FOS: Physical sciences,  FOS: Physical sciences},
-  title = {Fundamental Limitations of Absolute Ranging via Deep Frequency Modulation Interferometry},
-  publisher = {arXiv},
-  year = {2025},
-  copyright = {arXiv.org perpetual,  non-exclusive license}
+title = {The DeepFMKit python package: A toolbox for simulating and analyzing deep frequency modulation interferometers},
+journal = {Computer Physics Communications},
+volume = {319},
+pages = {109934},
+year = {2026},
+issn = {0010-4655},
+doi = {https://doi.org/10.1016/j.cpc.2025.109934},
+url = {https://www.sciencedirect.com/science/article/pii/S0010465525004357},
+author = {M.~Dovale-{\'A}lvarez},
+keywords = {Deep frequency modulation interferometry, Laser interferometry, Physics simulation, Parameter estimation, Scientific software, Python, Nonlinear least squares, Extended Kalman filter},
 }
 ```
